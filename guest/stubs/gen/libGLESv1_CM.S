@@ -1162,3 +1162,103 @@ glViewport:
     svc #0x5a008d
     bx lr
 .size glViewport, . - glViewport
+@ GL_OES_framebuffer_object entry points. OES enum values equal the core GLES 2 ones, so each
+@ OES name uses the host call of its GLES 2 twin. libunity (Unity 3.5/4.x) imports all twelve
+@ and the guest linker refuses to load it if any one is missing.
+
+.global glBindFramebufferOES
+.type glBindFramebufferOES, %function
+.p2align 2
+glBindFramebufferOES:
+    svc #0x5a0004
+    bx lr
+.size glBindFramebufferOES, . - glBindFramebufferOES
+
+.global glBindRenderbufferOES
+.type glBindRenderbufferOES, %function
+.p2align 2
+glBindRenderbufferOES:
+    svc #0x5a0005
+    bx lr
+.size glBindRenderbufferOES, . - glBindRenderbufferOES
+
+.global glCheckFramebufferStatusOES
+.type glCheckFramebufferStatusOES, %function
+.p2align 2
+glCheckFramebufferStatusOES:
+    svc #0x5a000e
+    bx lr
+.size glCheckFramebufferStatusOES, . - glCheckFramebufferStatusOES
+
+.global glDeleteFramebuffersOES
+.type glDeleteFramebuffersOES, %function
+.p2align 2
+glDeleteFramebuffersOES:
+    svc #0x5a001d
+    bx lr
+.size glDeleteFramebuffersOES, . - glDeleteFramebuffersOES
+
+.global glDeleteRenderbuffersOES
+.type glDeleteRenderbuffersOES, %function
+.p2align 2
+glDeleteRenderbuffersOES:
+    svc #0x5a001f
+    bx lr
+.size glDeleteRenderbuffersOES, . - glDeleteRenderbuffersOES
+
+.global glFramebufferRenderbufferOES
+.type glFramebufferRenderbufferOES, %function
+.p2align 2
+glFramebufferRenderbufferOES:
+    svc #0x5a002e
+    bx lr
+.size glFramebufferRenderbufferOES, . - glFramebufferRenderbufferOES
+
+.global glFramebufferTexture2DOES
+.type glFramebufferTexture2DOES, %function
+.p2align 2
+glFramebufferTexture2DOES:
+    svc #0x5a002f
+    bx lr
+.size glFramebufferTexture2DOES, . - glFramebufferTexture2DOES
+
+.global glGenFramebuffersOES
+.type glGenFramebuffersOES, %function
+.p2align 2
+glGenFramebuffersOES:
+    svc #0x5a0032
+    bx lr
+.size glGenFramebuffersOES, . - glGenFramebuffersOES
+
+.global glGenRenderbuffersOES
+.type glGenRenderbuffersOES, %function
+.p2align 2
+glGenRenderbuffersOES:
+    svc #0x5a0033
+    bx lr
+.size glGenRenderbuffersOES, . - glGenRenderbuffersOES
+
+.global glGenerateMipmapOES
+.type glGenerateMipmapOES, %function
+.p2align 2
+glGenerateMipmapOES:
+    svc #0x5a0035
+    bx lr
+.size glGenerateMipmapOES, . - glGenerateMipmapOES
+
+.global glGetFramebufferAttachmentParameterivOES
+.type glGetFramebufferAttachmentParameterivOES, %function
+.p2align 2
+glGetFramebufferAttachmentParameterivOES:
+    svc #0x5a003e
+    bx lr
+.size glGetFramebufferAttachmentParameterivOES, . - glGetFramebufferAttachmentParameterivOES
+
+.global glRenderbufferStorageOES
+.type glRenderbufferStorageOES, %function
+.p2align 2
+glRenderbufferStorageOES:
+    svc #0x5a005e
+    bx lr
+.size glRenderbufferStorageOES, . - glRenderbufferStorageOES
+

@@ -49,6 +49,13 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Make the repo's scripts executable
+        run: |
+          set -eu
+          # A repo made from a zip loses the executable flag, so every script needs it back.
+          chmod +x tools/*.sh tools/*.py android/launcher/gradlew
+          ls -l tools | head -30
+
       - name: Make sure Dynarmic is present
         run: |
           set -eu
