@@ -1,10 +1,14 @@
 #include "zb/process.h"
 
+#include <android/log.h>
+#include <dlfcn.h>
 #include <elf.h>
+#include <fcntl.h>
 #include <linux/futex.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <unwind.h>
 
 #include <atomic>
 #include <exception>
@@ -593,6 +597,56 @@ bool Process::after_stop(GuestThread& thread) {
 
 Process* Process::reporter_process = nullptr;
 
+// ---- abort recorder ----------------------------------------------------------------------------
+// The process can also die from a plain SIGABRT that the terminate reporter below never sees: the
+// message is "libc++abi: terminating" and nothing else, and Android's own crash dump may fail to
+// parse the guest mappings. This handler records, from the thread that aborts:
+//   - the host call stack (library, symbol, offset), which says whether the abort came from the
+//     translator, the GL driver, the JNI bridge or somewhere else;
+//   - the guest registers of the guest thread running on this host thread, its pc and lr resolved
+//     to library + offset, and every word on its stack that points into executable file-backed
+//     guest memory (a poor man's backtrace);
+//   - the recent JNI and EGL calls.
+// Every line goes to logcat (tag "zb-abort", priority F) and is appended to
+// <external files dir>/zb-abort.txt. Then control goes to the handler that was installed before
+// (the system's crash handler), so the usual crash dump and the exit status are unchanged.
+namespace {
+
+constexpr const char* kAbortTag = "zb-abort";
+// Same directory as zb-runtime-report.txt and zb-errors.txt. Change the package name if you rename it.
+constexpr const char* kAbortFile = "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-abort.txt";
+constexpr int kMaxHostFrames = 40;
+constexpr int kMaxGuestStackHits = 40;
+constexpr std::uint32_t kGuestStackScanWords = 1024;  // 4 KiB above sp
+
+int g_abort_fd = -1;
+struct sigaction g_previous_abort;
+std::atomic<bool> g_abort_seen{false};
+
+void abort_line(const char* text) {
+    __android_log_write(ANDROID_LOG_FATAL, kAbortTag, text);
+    if (g_abort_fd >= 0) {
+        [[maybe_unused]] const ssize_t a = ::write(g_abort_fd, text, std::strlen(text));
+        [[maybe_unused]] const ssize_t b = ::write(g_abort_fd, "\n", 1);
+    }
+}
+
+struct HostTrace {
+    void* frames[kMaxHostFrames];
+    int count = 0;
+};
+
+_Unwind_Reason_Code collect_host_frame(_Unwind_Context* context, void* arg) {
+    auto* trace = static_cast<HostTrace*>(arg);
+    const std::uintptr_t pc = _Unwind_GetIP(context);
+    if (pc == 0) return _URC_NO_REASON;
+    if (trace->count >= kMaxHostFrames) return _URC_END_OF_STACK;
+    trace->frames[trace->count++] = reinterpret_cast<void*>(pc);
+    return _URC_NO_REASON;
+}
+
+}  // namespace
+
 // The translator does not always throw when it cannot go on: a failed check inside it calls
 // std::terminate directly, and the process dies with the message "terminating" and a stripped
 // backtrace. Nothing can catch that, but the guest program counter of the thread it happened on
@@ -621,6 +675,97 @@ void Process::install_terminate_reporter() {
             if (previous != nullptr) previous();
             std::abort();
         });
+
+        // The abort recorder (see the block above). Installed after the system's own handler, so
+        // that one is called last.
+        g_abort_fd = ::open(kAbortFile, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+        struct sigaction action;
+        std::memset(&action, 0, sizeof action);
+        action.sa_sigaction = +[](int sig, siginfo_t* info, void* context) {
+            if (!g_abort_seen.exchange(true)) {
+                char line[512];
+                std::snprintf(line, sizeof line, "---- SIGABRT on host tid %ld, si_code %d, si_pid %d ----",
+                              static_cast<long>(::syscall(SYS_gettid)), info != nullptr ? info->si_code : 0,
+                              info != nullptr ? static_cast<int>(info->si_pid) : 0);
+                abort_line(line);
+
+                HostTrace trace;
+                _Unwind_Backtrace(collect_host_frame, &trace);
+                for (int i = 0; i < trace.count; ++i) {
+                    const auto pc = reinterpret_cast<std::uintptr_t>(trace.frames[i]);
+                    Dl_info dl;
+                    std::memset(&dl, 0, sizeof dl);
+                    if (dladdr(trace.frames[i], &dl) != 0 && dl.dli_fname != nullptr) {
+                        const auto base = reinterpret_cast<std::uintptr_t>(dl.dli_fbase);
+                        const auto sym = reinterpret_cast<std::uintptr_t>(dl.dli_saddr);
+                        std::snprintf(line, sizeof line, "host #%02d pc %llx %s (%s+%llx)", i,
+                                      static_cast<unsigned long long>(pc - base), dl.dli_fname,
+                                      dl.dli_sname != nullptr ? dl.dli_sname : "?",
+                                      static_cast<unsigned long long>(sym != 0 ? pc - sym : 0));
+                    } else {
+                        std::snprintf(line, sizeof line, "host #%02d pc %llx", i, static_cast<unsigned long long>(pc));
+                    }
+                    abort_line(line);
+                }
+
+                GuestThread* thread = Process::current_thread();
+                Process* process = reporter_process;
+                if (thread == nullptr || process == nullptr) {
+                    abort_line("guest: this host thread was running no guest code");
+                } else {
+                    const auto& r = thread->regs();
+                    auto where = [process](std::uint32_t address) { return process->describe_address(address & ~1u); };
+                    std::snprintf(line, sizeof line, "guest pc %08x in %s", r[15], where(r[15]).c_str());
+                    abort_line(line);
+                    std::snprintf(line, sizeof line, "guest lr %08x in %s", r[14], where(r[14]).c_str());
+                    abort_line(line);
+                    std::snprintf(line, sizeof line,
+                                  "guest r0=%08x r1=%08x r2=%08x r3=%08x r4=%08x r5=%08x r6=%08x r7=%08x",
+                                  r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
+                    abort_line(line);
+                    std::snprintf(line, sizeof line,
+                                  "guest r8=%08x r9=%08x r10=%08x r11=%08x r12=%08x sp=%08x cpsr=%08x tls=%08x",
+                                  r[8], r[9], r[10], r[11], r[12], r[13], thread->cpsr(), thread->tls());
+                    abort_line(line);
+
+                    const std::uint32_t sp = r[13];
+                    int shown = 0;
+                    for (std::uint32_t i = 0; i < kGuestStackScanWords && shown < kMaxGuestStackHits; ++i) {
+                        const std::uint32_t at = sp + 4 * i;
+                        const std::uint8_t* bytes = process->mem_.host_ptr(at, 4, kPageRead);
+                        if (bytes == nullptr) break;
+                        std::uint32_t word;
+                        std::memcpy(&word, bytes, sizeof word);
+                        const std::uint32_t code = word & ~1u;
+                        if (code < kPageSize || !process->mem_.accessible(code, 2, kPageExec)) continue;
+                        const std::string in = process->describe_address(code);
+                        if (in == "?") continue;
+                        std::snprintf(line, sizeof line, "guest stack sp+0x%x: %08x in %s", 4 * i, word, in.c_str());
+                        abort_line(line);
+                        ++shown;
+                    }
+
+                    std::string recent = "recent-jni-calls: " + jni_recent_calls();
+                    abort_line(recent.substr(0, 1500).c_str());
+                    recent = "recent-egl-calls: " + egl_recent_calls();
+                    abort_line(recent.substr(0, 1500).c_str());
+                }
+                abort_line("---- end of abort record ----");
+            }
+            // Hand over to the handler that was installed before this one (the system's crash
+            // handler). If there was none, returning lets abort() reset the action and raise again.
+            if ((g_previous_abort.sa_flags & SA_SIGINFO) != 0 && g_previous_abort.sa_sigaction != nullptr) {
+                g_previous_abort.sa_sigaction(sig, info, context);
+            } else if (g_previous_abort.sa_handler != SIG_DFL && g_previous_abort.sa_handler != SIG_IGN &&
+                       g_previous_abort.sa_handler != nullptr) {
+                g_previous_abort.sa_handler(sig);
+            }
+        };
+        action.sa_flags = SA_SIGINFO | SA_ONSTACK;
+        sigemptyset(&action.sa_mask);
+        if (sigaction(SIGABRT, &action, &g_previous_abort) != 0) {
+            log("cannot install the abort recorder: %s", std::strerror(errno));
+        }
     });
 }
 
