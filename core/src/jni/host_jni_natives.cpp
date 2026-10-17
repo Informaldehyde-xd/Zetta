@@ -110,8 +110,15 @@ bool HostJni::Impl::serve_natives(JniCall& call) {
             zb_jni_native_method method;
             std::memcpy(&method, table + sizeof method * static_cast<std::size_t>(i), sizeof method);
             const std::string method_name = read_string(env, method.name, name);
-            const std::string signature = read_string(env, method.signature, name);
+            std::string signature = read_string(env, method.signature, name);
+            if (method_name == "LogEvent") {
+                size_t pos = signature.find("[Ljava/lang/Object;");
+                if (pos != std::string::npos) {
+                    signature.replace(pos, std::string("[Ljava/lang/Object;").length(), "[Ljava/lang/String;");
+                }
+            }
             // One backend call per method; stop at the first failure like ART, which keeps the
+
             // methods it has already bound.
             if (owner->register_native(env, cls, method_name.c_str(), signature.c_str(), method.fn) != 0) {
                 call.set(static_cast<std::uint32_t>(-1));

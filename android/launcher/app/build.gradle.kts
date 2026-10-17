@@ -42,6 +42,13 @@ android {
         }
     }
     buildTypes {
+        // A debuggable app runs with CheckJNI switched on, and ART then aborts the whole process
+        // on JNI calls that an old game engine gets away with on a normal build (Unity 3.5 passes
+        // an Object[] where the Java method declares String[]). The debug build is therefore made
+        // non-debuggable; it is still signed with the debug key.
+        debug {
+            isDebuggable = false
+        }
         release {
             isMinifyEnabled = false
             if (hasReleaseKey) signingConfig = signingConfigs.getByName("release")
