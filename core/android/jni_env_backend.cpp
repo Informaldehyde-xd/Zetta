@@ -44,6 +44,42 @@ JniBackend::Id I(void* id) {
     return static_cast<JniBackend::Id>(reinterpret_cast<std::uintptr_t>(id));
 }
 
+// Android 10 and later throw SecurityException ("... does not meet the requirements to access
+// device identifiers") from TelephonyManager.getDeviceId(), getImei(), getSubscriberId() and
+// getSimSerialNumber() to a caller whose targetSdkVersion is 29 or higher, and return null to a
+// caller below 29. The guest is an old app that expects the old behaviour, but it runs under the
+// launcher's package, so it gets the exception instead and old native code never clears it.
+// Give it the old behaviour: when a call ends with exactly that exception, clear it and let the
+// call return null/0. Any other exception is put back untouched. Returns true if it cleared one.
+bool swallow_device_identifier_denial(JNIEnv* e) {
+    if (e->ExceptionCheck() == JNI_FALSE) return false;
+    jthrowable thrown = e->ExceptionOccurred();
+    e->ExceptionClear();
+    if (thrown == nullptr) return false;
+    bool legacy_denial = false;
+    jclass security = e->FindClass("java/lang/SecurityException");
+    jclass throwable = e->FindClass("java/lang/Throwable");
+    if (security != nullptr && throwable != nullptr && e->IsInstanceOf(thrown, security) != JNI_FALSE) {
+        jmethodID get_message = e->GetMethodID(throwable, "getMessage", "()Ljava/lang/String;");
+        jstring message = get_message != nullptr ? static_cast<jstring>(e->CallObjectMethod(thrown, get_message)) : nullptr;
+        if (e->ExceptionCheck() != JNI_FALSE) e->ExceptionClear();
+        if (message != nullptr) {
+            const char* chars = e->GetStringUTFChars(message, nullptr);
+            if (chars != nullptr) {
+                legacy_denial = std::strstr(chars, "access device identifiers") != nullptr;
+                e->ReleaseStringUTFChars(message, chars);
+            }
+            e->DeleteLocalRef(message);
+        }
+    }
+    if (e->ExceptionCheck() != JNI_FALSE) e->ExceptionClear();  // a failed lookup above
+    if (security != nullptr) e->DeleteLocalRef(security);
+    if (throwable != nullptr) e->DeleteLocalRef(throwable);
+    if (!legacy_denial) e->Throw(thrown);
+    e->DeleteLocalRef(thrown);
+    return legacy_denial;
+}
+
 }  // namespace
 
 JniEnvBackend::JniEnvBackend(JavaVM* vm) : vm_(vm) {}
@@ -410,16 +446,35 @@ NativeLookupStatus JniEnvBackend::find_declared_natives(Env env, const char* cls
 JniBackend::Ref JniEnvBackend::find_class(Env env, const char* name) {
     JNIEnv* e = E(env);
     if (e == nullptr || name == nullptr) return 0;
+    // Without CheckJNI, ART lets FindClass run with an exception pending, and old native code
+    // relies on it: it makes a call that throws, never clears the exception, and goes on to look
+    // up the next class. reflection() refuses to run with an exception pending, which made this
+    // return null and the guest then aborted in GetStaticFieldID(null). Set the pending exception
+    // aside for the lookup and put it back afterwards, so the guest still sees it.
+    jthrowable pending = nullptr;
+    if (e->ExceptionCheck() != JNI_FALSE) {
+        pending = e->ExceptionOccurred();
+        e->ExceptionClear();
+    }
+    Ref found = 0;
     const jobject loader = class_loader();
     const std::optional<std::string> binary_name = jni_binary_class_name(name);
-    if (loader == nullptr || !binary_name) return R(e->FindClass(name));
-    const Reflection* r = reflection(e);
-    if (r == nullptr) return 0;
-    jstring java_name = e->NewStringUTF(binary_name->c_str());
-    if (java_name == nullptr) return 0;
-    jobject found = e->CallObjectMethod(loader, r->class_loader_load_class, java_name);
-    e->DeleteLocalRef(java_name);
-    return R(found);
+    if (loader == nullptr || !binary_name) {
+        found = R(e->FindClass(name));
+    } else if (const Reflection* r = reflection(e)) {
+        jstring java_name = e->NewStringUTF(binary_name->c_str());
+        if (java_name != nullptr) {
+            jobject cls = e->CallObjectMethod(loader, r->class_loader_load_class, java_name);
+            e->DeleteLocalRef(java_name);
+            found = R(cls);
+        }
+    }
+    if (pending != nullptr) {
+        // A lookup that failed leaves its own exception pending, which replaces the old one.
+        if (found != 0 && e->ExceptionCheck() == JNI_FALSE) e->Throw(pending);
+        e->DeleteLocalRef(pending);
+    }
+    return found;
 }
 
 JniBackend::Ref JniEnvBackend::get_superclass(Env env, Ref cls) {
@@ -538,6 +593,8 @@ JValue JniEnvBackend::call_method(Env env, JniCallKind kind, char type, Ref obj,
     default: ZB_CALL(Void, , ) break;
     }
 #undef ZB_CALL
+    // See swallow_device_identifier_denial(): the guest gets the pre-Android-10 answer (null).
+    if (swallow_device_identifier_denial(e)) out = JValue{};
     return out;
 }
 
