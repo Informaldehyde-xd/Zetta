@@ -44,36 +44,56 @@ JniBackend::Id I(void* id) {
     return static_cast<JniBackend::Id>(reinterpret_cast<std::uintptr_t>(id));
 }
 
-// Android 10 and later throw SecurityException ("... does not meet the requirements to access
-// device identifiers") from TelephonyManager.getDeviceId(), getImei(), getSubscriberId() and
-// getSimSerialNumber() to a caller whose targetSdkVersion is 29 or higher, and return null to a
-// caller below 29. The guest is an old app that expects the old behaviour, but it runs under the
-// launcher's package, so it gets the exception instead and old native code never clears it.
-// Give it the old behaviour: when a call ends with exactly that exception, clear it and let the
-// call return null/0. Any other exception is put back untouched. Returns true if it cleared one.
-bool swallow_device_identifier_denial(JNIEnv* e) {
+// The guest is an old app that runs under the launcher's package, so Android applies the launcher's
+// (recent) targetSdkVersion to its calls. Some checks only throw for a recent target and either
+// pass or return null for an old one, and old native code never clears the exception: the next JNI
+// call (FindClass, GetFieldID, ...) then aborts the whole process inside ART.
+//   - Android 10: TelephonyManager.getDeviceId()/getImei()/getSubscriberId()/getSimSerialNumber()
+//     throw SecurityException "... does not meet the requirements to access device identifiers"
+//     for a target of 29 or higher, and return null below that.
+//   - Android 12: PendingIntent.getBroadcast() and friends throw IllegalArgumentException "...
+//     requires that one of FLAG_IMMUTABLE or FLAG_MUTABLE be specified" for a target of 31 or
+//     higher, and accept the call below that.
+// When a call ends with exactly one of these exceptions it is cleared and the call returns null/0,
+// which is what the old app was written for. Any other exception is put back untouched.
+struct LegacyDenial {
+    const char* exception_class;
+    const char* message_marker;
+};
+constexpr LegacyDenial kLegacyDenials[] = {
+    {"java/lang/SecurityException", "access device identifiers"},
+    {"java/lang/IllegalArgumentException", "FLAG_IMMUTABLE or FLAG_MUTABLE"},
+};
+
+// Returns true if it cleared such an exception.
+bool swallow_legacy_denial(JNIEnv* e) {
     if (e->ExceptionCheck() == JNI_FALSE) return false;
     jthrowable thrown = e->ExceptionOccurred();
     e->ExceptionClear();
     if (thrown == nullptr) return false;
     bool legacy_denial = false;
-    jclass security = e->FindClass("java/lang/SecurityException");
     jclass throwable = e->FindClass("java/lang/Throwable");
-    if (security != nullptr && throwable != nullptr && e->IsInstanceOf(thrown, security) != JNI_FALSE) {
-        jmethodID get_message = e->GetMethodID(throwable, "getMessage", "()Ljava/lang/String;");
-        jstring message = get_message != nullptr ? static_cast<jstring>(e->CallObjectMethod(thrown, get_message)) : nullptr;
-        if (e->ExceptionCheck() != JNI_FALSE) e->ExceptionClear();
-        if (message != nullptr) {
-            const char* chars = e->GetStringUTFChars(message, nullptr);
-            if (chars != nullptr) {
-                legacy_denial = std::strstr(chars, "access device identifiers") != nullptr;
-                e->ReleaseStringUTFChars(message, chars);
+    jmethodID get_message =
+        throwable != nullptr ? e->GetMethodID(throwable, "getMessage", "()Ljava/lang/String;") : nullptr;
+    jstring message = get_message != nullptr ? static_cast<jstring>(e->CallObjectMethod(thrown, get_message)) : nullptr;
+    if (e->ExceptionCheck() != JNI_FALSE) e->ExceptionClear();
+    if (message != nullptr) {
+        const char* chars = e->GetStringUTFChars(message, nullptr);
+        if (chars != nullptr) {
+            for (const LegacyDenial& denial : kLegacyDenials) {
+                if (std::strstr(chars, denial.message_marker) == nullptr) continue;
+                jclass type = e->FindClass(denial.exception_class);
+                if (type != nullptr) {
+                    legacy_denial = e->IsInstanceOf(thrown, type) != JNI_FALSE;
+                    e->DeleteLocalRef(type);
+                }
+                if (e->ExceptionCheck() != JNI_FALSE) e->ExceptionClear();
+                if (legacy_denial) break;
             }
-            e->DeleteLocalRef(message);
+            e->ReleaseStringUTFChars(message, chars);
         }
+        e->DeleteLocalRef(message);
     }
-    if (e->ExceptionCheck() != JNI_FALSE) e->ExceptionClear();  // a failed lookup above
-    if (security != nullptr) e->DeleteLocalRef(security);
     if (throwable != nullptr) e->DeleteLocalRef(throwable);
     if (!legacy_denial) e->Throw(thrown);
     e->DeleteLocalRef(thrown);
@@ -593,8 +613,8 @@ JValue JniEnvBackend::call_method(Env env, JniCallKind kind, char type, Ref obj,
     default: ZB_CALL(Void, , ) break;
     }
 #undef ZB_CALL
-    // See swallow_device_identifier_denial(): the guest gets the pre-Android-10 answer (null).
-    if (swallow_device_identifier_denial(e)) out = JValue{};
+    // See swallow_legacy_denial(): the guest gets the answer an old target would have got (null).
+    if (swallow_legacy_denial(e)) out = JValue{};
     return out;
 }
 
