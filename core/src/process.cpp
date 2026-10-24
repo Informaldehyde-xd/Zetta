@@ -106,6 +106,7 @@ namespace {
 
 // Same directory as zb-runtime-report.txt. Change the package name if you rename it.
 constexpr const char* kProfileFile = "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-profile.txt";
+constexpr const char* kDumpRequestFile = "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-dump-now";
 constexpr const char* kFreezeFile = "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-freeze.txt";
 constexpr const char* kPcProfileFile = "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-pcprofile.txt";
 // The latest busy window is replaced as the game goes on (a pause or a menu would otherwise
@@ -940,6 +941,7 @@ void Process::install_terminate_reporter() {
             };
             const long ticks_per_second = sysconf(_SC_CLK_TCK) > 0 ? sysconf(_SC_CLK_TCK) : 100;
             auto window_start = std::chrono::steady_clock::now();
+            auto last_dump_check = window_start;
             std::uint64_t busiest_cpu = 0;
             std::uint64_t calls_before = 0;
             for (;;) {
@@ -975,7 +977,15 @@ void Process::install_terminate_reporter() {
                 }
 
                 const auto now = std::chrono::steady_clock::now();
-                if (now - window_start < std::chrono::seconds(10)) continue;
+                // Manual trigger: "touch zb-dump-now" in the files folder writes zb-freeze.txt within
+                // about a second, even when the game still makes many host calls (a stuck loader
+                // thread while the main thread keeps running never looks "stopped" to the check below).
+                bool manual_dump = false;
+                if (now - last_dump_check >= std::chrono::milliseconds(500)) {
+                    last_dump_check = now;
+                    manual_dump = (::access(kDumpRequestFile, F_OK) == 0);
+                }
+                if (!manual_dump && now - window_start < std::chrono::seconds(10)) continue;
                 const double seconds = std::chrono::duration<double>(now - window_start).count();
                 window_start = now;
 
@@ -998,7 +1008,7 @@ void Process::install_terminate_reporter() {
                 for (std::size_t i = 0; i < kProfileSlots; ++i) calls_now += g_host_call_count[i].load(std::memory_order_relaxed);
                 const std::uint64_t calls_in_window = calls_now - std::min(calls_now, calls_before);
                 calls_before = calls_now;
-                if (calls_in_window < 50 && calls_now > 1000) {
+                if ((calls_in_window < 50 && calls_now > 1000) || manual_dump) {
                     struct Snapshot {
                         std::int32_t tid;
                         std::uint32_t pc, lr, sp;
@@ -1080,6 +1090,7 @@ void Process::install_terminate_reporter() {
                     }
                     freeze += "\nrecent-jni-calls: " + jni_recent_calls().substr(0, 1500) + "\n";
                     write_text_file(kFreezeFile, freeze);
+                    if (manual_dump) ::unlink(kDumpRequestFile);
                 }
 
                 if (busiest.empty() || static_cast<double>(busiest.front().first) < 0.05 * window_ticks) {
