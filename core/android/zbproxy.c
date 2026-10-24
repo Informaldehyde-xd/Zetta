@@ -56,8 +56,25 @@ static int supported_version(jint version) {
     return version == JNI_VERSION_1_2 || version == JNI_VERSION_1_4 || version == JNI_VERSION_1_6;
 }
 
+// A guest library may call System.loadLibrary itself, straight from native code. ART then has no
+// Java caller frame, uses the boot class loader, and FindClass cannot see com.zettabridge.core.*
+// ("class ... not found" and a NoClassDefFoundError that kills the app). The first load happens
+// with the plugin loader, so the class is remembered here as a global reference and reused when
+// FindClass fails. A repeated load of the same proxy is harmless: the bridge answers it from its
+// table and does not load the guest library twice.
+static jclass g_bridge_class;
+
 static jclass find_bridge(JNIEnv* env, jobject activity) {
-    if (activity == NULL) return (*env)->FindClass(env, kBridgeClass);
+    if (activity == NULL) {
+        jclass found = (*env)->FindClass(env, kBridgeClass);
+        if (found != NULL) {
+            if (g_bridge_class == NULL) g_bridge_class = (jclass)(*env)->NewGlobalRef(env, found);
+            return found;
+        }
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (g_bridge_class != NULL) return (jclass)(*env)->NewLocalRef(env, g_bridge_class);
+        return NULL;
+    }
 
     jclass activity_class = NULL;
     jobject loader = NULL;
