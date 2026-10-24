@@ -341,6 +341,27 @@ std::string Process::translate_path(const char* guest_path) const {
         }
         if (best_from != nullptr) return *best_to + std::string(path.substr(best_from->size()));
     }
+    // Old games open the platform libraries by absolute path (dlopen("/system/lib/libandroid.so"),
+    // libEGL.so ...). The guest linker has to see that path, but the file behind it must be the
+    // launcher's own stub from <runtime>/guest/lib, never a copy from the sysroot or the device:
+    // a failed dlopen leaves the game with empty function pointers (it then jumps to address 0).
+    if (!sysroot_.empty() && path.size() > 12 && path.substr(0, 12) == "/system/lib/") {
+        static constexpr std::string_view kStubLibraries[] = {
+            "libandroid.so", "libEGL.so", "libGLESv1_CM.so", "libGLESv2.so", "libjnigraphics.so"};
+        static constexpr std::string_view kSysrootSuffix = "/sysroot";
+        const std::string_view name = path.substr(12);
+        const std::string_view root(sysroot_);
+        for (const std::string_view stub_name : kStubLibraries) {
+            if (name != stub_name) continue;
+            if (root.size() > kSysrootSuffix.size() && root.substr(root.size() - kSysrootSuffix.size()) == kSysrootSuffix) {
+                std::string stub(root.substr(0, root.size() - kSysrootSuffix.size()));
+                stub += "/guest/lib/";
+                stub += name;
+                if (::access(stub.c_str(), F_OK) == 0) return stub;
+            }
+            break;
+        }
+    }
     if (!sysroot_.empty()) {
         for (const auto& m : kPathMappings) {
             if (path.substr(0, m.guest_prefix.size()) == m.guest_prefix) {
