@@ -6,6 +6,7 @@
 #include <string>
 #include <type_traits>
 
+#include "gl/host_gles1.h"
 #include "zb/runtime_report.h"
 
 namespace zb {
@@ -79,6 +80,10 @@ std::uint64_t GlDriverBackend::invoke(const char*, std::initializer_list<std::ui
     // Every typed virtual is overridden above; the portable invoke() seam (used by MockGles in
     // host tests) is never reached in production.
     return 0;
+}
+
+void* gl_resolve_proc(const char* name) {
+    return reinterpret_cast<void*>(::eglGetProcAddress(name));
 }
 
 std::uintptr_t gl_egl_context() {

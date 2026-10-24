@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "gl/gl_diagnostics.h"
+#include "gl/host_gles1.h"
 #include "zb/gl_hostcalls.h"
 #include "zb/log.h"
 #include "zb/runtime_report.h"
@@ -81,7 +82,8 @@ bool gl_trace_enabled() {
 }  // namespace
 
 bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
-    if (!is_gl_host_call(index)) return false;
+    // OpenGL ES 1.x fixed-function names (old Unity 3.x games) live outside the GLES 2.0/3.0 ranges.
+    if (!is_gl_host_call(index)) return gles1_handle_host_call(*this, index, thread);
     const char* name = gl_host_call_name(index);
     if (gl_trace_enabled()) {
         log("GLES trace: %s(0x%x, 0x%x, 0x%x, 0x%x)", name, thread.regs()[0], thread.regs()[1],

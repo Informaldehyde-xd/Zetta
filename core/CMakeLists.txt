@@ -19,6 +19,7 @@ add_library(zbcore STATIC
     src/gl/gl_manual.cpp
     src/gl/host_egl.cpp
     src/gl/host_gl.cpp
+    src/gl/host_gles1.cpp
     src/initial_stack.cpp
     src/jni/descriptor.cpp
     src/jni/handles.cpp
