@@ -1163,14 +1163,14 @@ glViewport:
     bx lr
 .size glViewport, . - glViewport
 @ GL_OES_framebuffer_object entry points. OES enum values equal the core GLES 2 ones, so each
-@ OES name uses the host call of its GLES 2 twin. libunity (Unity 3.5/4.x) imports all twelve
+@ OES name has its own host call (579-590, core/src/gl/host_gles1.cpp): an ES 1.x context has no GLES 2 twin. libunity (Unity 3.5/4.x) imports all twelve
 @ and the guest linker refuses to load it if any one is missing.
 
 .global glBindFramebufferOES
 .type glBindFramebufferOES, %function
 .p2align 2
 glBindFramebufferOES:
-    svc #0x5a0004
+    svc #0x5a0243
     bx lr
 .size glBindFramebufferOES, . - glBindFramebufferOES
 
@@ -1178,7 +1178,7 @@ glBindFramebufferOES:
 .type glBindRenderbufferOES, %function
 .p2align 2
 glBindRenderbufferOES:
-    svc #0x5a0005
+    svc #0x5a0244
     bx lr
 .size glBindRenderbufferOES, . - glBindRenderbufferOES
 
@@ -1186,7 +1186,7 @@ glBindRenderbufferOES:
 .type glCheckFramebufferStatusOES, %function
 .p2align 2
 glCheckFramebufferStatusOES:
-    svc #0x5a000e
+    svc #0x5a0245
     bx lr
 .size glCheckFramebufferStatusOES, . - glCheckFramebufferStatusOES
 
@@ -1194,7 +1194,7 @@ glCheckFramebufferStatusOES:
 .type glDeleteFramebuffersOES, %function
 .p2align 2
 glDeleteFramebuffersOES:
-    svc #0x5a001d
+    svc #0x5a0246
     bx lr
 .size glDeleteFramebuffersOES, . - glDeleteFramebuffersOES
 
@@ -1202,7 +1202,7 @@ glDeleteFramebuffersOES:
 .type glDeleteRenderbuffersOES, %function
 .p2align 2
 glDeleteRenderbuffersOES:
-    svc #0x5a001f
+    svc #0x5a0247
     bx lr
 .size glDeleteRenderbuffersOES, . - glDeleteRenderbuffersOES
 
@@ -1210,7 +1210,7 @@ glDeleteRenderbuffersOES:
 .type glFramebufferRenderbufferOES, %function
 .p2align 2
 glFramebufferRenderbufferOES:
-    svc #0x5a002e
+    svc #0x5a0248
     bx lr
 .size glFramebufferRenderbufferOES, . - glFramebufferRenderbufferOES
 
@@ -1218,7 +1218,7 @@ glFramebufferRenderbufferOES:
 .type glFramebufferTexture2DOES, %function
 .p2align 2
 glFramebufferTexture2DOES:
-    svc #0x5a002f
+    svc #0x5a0249
     bx lr
 .size glFramebufferTexture2DOES, . - glFramebufferTexture2DOES
 
@@ -1226,7 +1226,7 @@ glFramebufferTexture2DOES:
 .type glGenFramebuffersOES, %function
 .p2align 2
 glGenFramebuffersOES:
-    svc #0x5a0032
+    svc #0x5a024a
     bx lr
 .size glGenFramebuffersOES, . - glGenFramebuffersOES
 
@@ -1234,7 +1234,7 @@ glGenFramebuffersOES:
 .type glGenRenderbuffersOES, %function
 .p2align 2
 glGenRenderbuffersOES:
-    svc #0x5a0033
+    svc #0x5a024b
     bx lr
 .size glGenRenderbuffersOES, . - glGenRenderbuffersOES
 
@@ -1242,7 +1242,7 @@ glGenRenderbuffersOES:
 .type glGenerateMipmapOES, %function
 .p2align 2
 glGenerateMipmapOES:
-    svc #0x5a0035
+    svc #0x5a024c
     bx lr
 .size glGenerateMipmapOES, . - glGenerateMipmapOES
 
@@ -1250,7 +1250,7 @@ glGenerateMipmapOES:
 .type glGetFramebufferAttachmentParameterivOES, %function
 .p2align 2
 glGetFramebufferAttachmentParameterivOES:
-    svc #0x5a003e
+    svc #0x5a024d
     bx lr
 .size glGetFramebufferAttachmentParameterivOES, . - glGetFramebufferAttachmentParameterivOES
 
@@ -1258,7 +1258,7 @@ glGetFramebufferAttachmentParameterivOES:
 .type glRenderbufferStorageOES, %function
 .p2align 2
 glRenderbufferStorageOES:
-    svc #0x5a005e
+    svc #0x5a024e
     bx lr
 .size glRenderbufferStorageOES, . - glRenderbufferStorageOES
 

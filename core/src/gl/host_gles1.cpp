@@ -4,6 +4,7 @@
 #include <bit>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "zb/guest_memory.h"
 #include "zb/host_gl.h"
@@ -53,6 +54,18 @@ enum class Op : std::uint8_t {
     TexEnvfv,
     TexEnvi,
     VertexPointer,
+    BindFramebufferOES,
+    BindRenderbufferOES,
+    CheckFramebufferStatusOES,
+    DeleteFramebuffersOES,
+    DeleteRenderbuffersOES,
+    FramebufferRenderbufferOES,
+    FramebufferTexture2DOES,
+    GenFramebuffersOES,
+    GenRenderbuffersOES,
+    GenerateMipmapOES,
+    GetFramebufferAttachmentParameterivOES,
+    RenderbufferStorageOES,
 };
 
 struct OpName {
@@ -86,10 +99,30 @@ constexpr OpName kOps[] = {
     {Op::TexEnvfv, "glTexEnvfv"},
     {Op::TexEnvi, "glTexEnvi"},
     {Op::VertexPointer, "glVertexPointer"},
+    {Op::BindFramebufferOES, "glBindFramebufferOES"},
+    {Op::BindRenderbufferOES, "glBindRenderbufferOES"},
+    {Op::CheckFramebufferStatusOES, "glCheckFramebufferStatusOES"},
+    {Op::DeleteFramebuffersOES, "glDeleteFramebuffersOES"},
+    {Op::DeleteRenderbuffersOES, "glDeleteRenderbuffersOES"},
+    {Op::FramebufferRenderbufferOES, "glFramebufferRenderbufferOES"},
+    {Op::FramebufferTexture2DOES, "glFramebufferTexture2DOES"},
+    {Op::GenFramebuffersOES, "glGenFramebuffersOES"},
+    {Op::GenRenderbuffersOES, "glGenRenderbuffersOES"},
+    {Op::GenerateMipmapOES, "glGenerateMipmapOES"},
+    {Op::GetFramebufferAttachmentParameterivOES, "glGetFramebufferAttachmentParameterivOES"},
+    {Op::RenderbufferStorageOES, "glRenderbufferStorageOES"},
 };
 
 constexpr std::uint32_t kFirstIndex = 492;
-constexpr std::uint32_t kLastIndex = 578;
+constexpr std::uint32_t kLastIndex = 590;
+// GL_OES_framebuffer_object: guest stubs 579-590 (an ES 1.x context has no GLES 2 twin to borrow).
+constexpr std::uint32_t kFirstOesIndex = 579;
+constexpr Op kOesOps[] = {
+    Op::BindFramebufferOES, Op::BindRenderbufferOES, Op::CheckFramebufferStatusOES,
+    Op::DeleteFramebuffersOES, Op::DeleteRenderbuffersOES, Op::FramebufferRenderbufferOES,
+    Op::FramebufferTexture2DOES, Op::GenFramebuffersOES, Op::GenRenderbuffersOES,
+    Op::GenerateMipmapOES, Op::GetFramebufferAttachmentParameterivOES, Op::RenderbufferStorageOES,
+};
 constexpr std::uint32_t kArrayBufferBinding = 0x8894;
 
 Op op_for_index(std::uint32_t index) {
@@ -101,6 +134,9 @@ Op op_for_index(std::uint32_t index) {
             for (const OpName& op : kOps) {
                 if (std::strcmp(op.name, entry.name) == 0) result[entry.index - kFirstIndex] = op.op;
             }
+        }
+        for (std::uint32_t i = 0; i < sizeof kOesOps / sizeof kOesOps[0]; ++i) {
+            result[kFirstOesIndex + i - kFirstIndex] = kOesOps[i];
         }
         return result;
     }();
@@ -264,6 +300,67 @@ bool gles1_handle_host_call(HostGl& host, std::uint32_t index, GuestThread& thre
         if (!read_floats(a0, 16, values)) break;
         reinterpret_cast<void (*)(const float*)>(entry)(values);
         break;
+    case Op::BindFramebufferOES:
+    case Op::BindRenderbufferOES:
+    case Op::RenderbufferStorageOES:
+        if (op == Op::RenderbufferStorageOES) {
+            reinterpret_cast<void (*)(std::uint32_t, std::uint32_t, std::int32_t, std::int32_t)>(entry)(
+                a0, a1, static_cast<std::int32_t>(a2), static_cast<std::int32_t>(a3));
+        } else {
+            reinterpret_cast<void (*)(std::uint32_t, std::uint32_t)>(entry)(a0, a1);
+        }
+        break;
+    case Op::CheckFramebufferStatusOES:
+        regs[0] = reinterpret_cast<std::uint32_t (*)(std::uint32_t)>(entry)(a0);
+        break;
+    case Op::GenerateMipmapOES:
+        reinterpret_cast<void (*)(std::uint32_t)>(entry)(a0);
+        break;
+    case Op::FramebufferRenderbufferOES:
+        reinterpret_cast<void (*)(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t)>(entry)(a0, a1, a2, a3);
+        break;
+    case Op::FramebufferTexture2DOES: {
+        // The fifth argument (level) is on the guest stack.
+        const std::uint8_t* level_word = host.runtime().memory().host_ptr(regs[13], 4, kPageRead);
+        if (level_word == nullptr) break;
+        std::int32_t level;
+        std::memcpy(&level, level_word, sizeof level);
+        reinterpret_cast<void (*)(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::int32_t)>(entry)(
+            a0, a1, a2, a3, level);
+        break;
+    }
+    case Op::GenFramebuffersOES:
+    case Op::GenRenderbuffersOES: {
+        // The driver writes the new names straight into guest memory (it is mapped linearly).
+        const std::int32_t count = static_cast<std::int32_t>(a0);
+        if (count <= 0 || count > 4096) break;
+        std::uint8_t* target = host.runtime().memory().host_ptr(a1, 4ull * count, kPageRead | kPageWrite);
+        if (target == nullptr) {
+            log("GLES1 %s: guest pointer 0x%x is not writable", name_for_op(op), a1);
+            break;
+        }
+        reinterpret_cast<void (*)(std::int32_t, std::uint32_t*)>(entry)(
+            count, reinterpret_cast<std::uint32_t*>(target));
+        break;
+    }
+    case Op::DeleteFramebuffersOES:
+    case Op::DeleteRenderbuffersOES: {
+        const std::int32_t count = static_cast<std::int32_t>(a0);
+        if (count <= 0 || count > 4096) break;
+        const std::uint8_t* source = host.runtime().memory().host_ptr(a1, 4ull * count, kPageRead);
+        if (source == nullptr) break;
+        std::vector<std::uint32_t> names(static_cast<std::size_t>(count));
+        std::memcpy(names.data(), source, 4u * static_cast<std::size_t>(count));
+        reinterpret_cast<void (*)(std::int32_t, const std::uint32_t*)>(entry)(count, names.data());
+        break;
+    }
+    case Op::GetFramebufferAttachmentParameterivOES: {
+        std::uint8_t* target = host.runtime().memory().host_ptr(a3, 4, kPageRead | kPageWrite);
+        if (target == nullptr) break;
+        reinterpret_cast<void (*)(std::uint32_t, std::uint32_t, std::uint32_t, std::int32_t*)>(entry)(
+            a0, a1, a2, reinterpret_cast<std::int32_t*>(target));
+        break;
+    }
     case Op::None:
         break;
     }
