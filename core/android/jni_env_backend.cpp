@@ -1,7 +1,10 @@
 // JniBackend over the real JNIEnv (Android build only; compile-checked here, exercised by T7 in 4d).
 #include "jni_env_backend.h"
 
+#include <atomic>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -9,10 +12,32 @@
 #include <vector>
 
 #include "zb/jni_descriptor.h"
+#include "zb/runtime_report.h"
 
 namespace zb {
 
 namespace {
+
+// Screen size override for old games. A game's Java class UnityPlayer.getScreenDPI() returns the
+// real screen dpi (about 400 on a modern phone), and many Unity 3.x menus size their buttons from
+// it. If <external files dir>/zb-dpi.txt holds a number (for example 200), the guest gets that
+// number instead. The file is read on every call, so it can be changed between runs without
+// rebuilding or re-importing the game. Without the file nothing changes.
+constexpr const char* kDpiFile = "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-dpi.txt";
+std::atomic<jmethodID> g_screen_dpi_method{nullptr};
+
+float read_dpi_override() {
+    std::FILE* file = std::fopen(kDpiFile, "r");
+    if (file == nullptr) return 0.0f;
+    char text[64] = {};
+    const std::size_t length = std::fread(text, 1, sizeof text - 1, file);
+    std::fclose(file);
+    text[length] = '\0';
+    const char* digits = text;
+    while (*digits != '\0' && (*digits < '0' || *digits > '9')) ++digits;
+    const float value = std::strtof(digits, nullptr);
+    return value >= 20.0f && value <= 1000.0f ? value : 0.0f;
+}
 
 static_assert(sizeof(jvalue) == sizeof(JValue) && alignof(jvalue) == alignof(JValue));
 
@@ -507,8 +532,13 @@ bool JniEnvBackend::is_assignable_from(Env env, Ref from, Ref to) {
 
 JniBackend::Id JniEnvBackend::get_method_id(Env env, Ref cls, const char* name, const char* signature,
                                             bool is_static) {
-    return I(is_static ? E(env)->GetStaticMethodID(C(cls), name, signature)
-                       : E(env)->GetMethodID(C(cls), name, signature));
+    const jmethodID method = is_static ? E(env)->GetStaticMethodID(C(cls), name, signature)
+                                       : E(env)->GetMethodID(C(cls), name, signature);
+    if (!is_static && method != nullptr && name != nullptr && signature != nullptr &&
+        std::strcmp(name, "getScreenDPI") == 0 && std::strcmp(signature, "()F") == 0) {
+        g_screen_dpi_method.store(method);
+    }
+    return I(method);
 }
 
 JniBackend::Id JniEnvBackend::get_field_id(Env env, Ref cls, const char* name, const char* signature,
@@ -599,6 +629,15 @@ JValue JniEnvBackend::call_method(Env env, JniCallKind kind, char type, Ref obj,
     if (kind == JniCallKind::NewObject) {
         out.l = R(e->NewObjectA(C(cls), m, a));
         return out;
+    }
+    if (type == 'F' && m != nullptr && m == g_screen_dpi_method.load()) {
+        const float override_dpi = read_dpi_override();
+        if (override_dpi > 0.0f) {
+            runtime_report().note_jni_detail("screen-dpi", "game asked, answered " + std::to_string(override_dpi) + " (zb-dpi.txt)", true);
+            out.f = override_dpi;
+            return out;
+        }
+        runtime_report().note_jni_detail("screen-dpi", "game asked, real value (no zb-dpi.txt)", true);
     }
     switch (type) {
     case 'Z': ZB_CALL(Boolean, out.z =, ) break;
