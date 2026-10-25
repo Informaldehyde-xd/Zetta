@@ -42,6 +42,11 @@ final class GuestWindowStyle {
     static void afterCreate(Activity activity) {
         Window window = activity.getWindow();
         if (window == null) return;
+        try {
+            AspectLetterbox.apply(activity);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "cannot apply the aspect ratio setting: " + e);
+        }
         final int flags = window.getAttributes().flags;
         if ((flags & WindowManager.LayoutParams.FLAG_FULLSCREEN) == 0) return;
         if (activity.getActionBar() != null) activity.getActionBar().hide();

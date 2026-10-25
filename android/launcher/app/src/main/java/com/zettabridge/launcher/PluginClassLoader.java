@@ -44,13 +44,50 @@ final class PluginClassLoader extends DexClassLoader {
                     try {
                         loaded = findClass(name);
                     } catch (ClassNotFoundException missing) {
-                        loaded = super.loadClass(name, false);
+                        loaded = loadFromParentOrLegacyHttp(name);
                     }
                 }
             }
             if (resolve) resolveClass(loaded);
             return loaded;
         }
+    }
+
+    private static final String LEGACY_HTTP_JAR = "/system/framework/org.apache.http.legacy.jar";
+    private ClassLoader legacyHttp;
+    private boolean legacyHttpChecked;
+
+    /**
+     * Android 9 and newer removed org.apache.http from the default class path; an app only gets it
+     * by declaring uses-library org.apache.http.legacy. Old ad and network code (for example the
+     * MobileCore ad library in Trial Xtreme) calls it from a background task, and the missing class
+     * kills the process. The platform still ships the jar, so serve those classes from it.
+     */
+    private Class<?> loadFromParentOrLegacyHttp(String name) throws ClassNotFoundException {
+        try {
+            return super.loadClass(name, false);
+        } catch (ClassNotFoundException missing) {
+            if (name.startsWith("org.apache.http.")) {
+                ClassLoader legacy = legacyHttpLoader();
+                if (legacy != null) {
+                    try {
+                        return legacy.loadClass(name);
+                    } catch (ClassNotFoundException ignored) {
+                        // fall through to the original error
+                    }
+                }
+            }
+            throw missing;
+        }
+    }
+
+    private ClassLoader legacyHttpLoader() {
+        if (!legacyHttpChecked) {
+            legacyHttpChecked = true;
+            File jar = new File(LEGACY_HTTP_JAR);
+            if (jar.isFile()) legacyHttp = new dalvik.system.PathClassLoader(jar.getPath(), getParent());
+        }
+        return legacyHttp;
     }
 
     @Override
