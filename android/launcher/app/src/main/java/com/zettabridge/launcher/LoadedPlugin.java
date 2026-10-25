@@ -83,6 +83,8 @@ final class LoadedPlugin {
         LoadedPlugin p = new LoadedPlugin(record, ai, res, cl);
         p.info = info;
         if (record.isTranslated()) {
+            // Games read Build.CPU_ABI in Java before they load a library; show them the ARM 32-bit ABI.
+            AbiSpoof.apply(record.selectedAbi);
             // Must precede activatePlugin: the guest runtime is process-lifetime and reads
             // ZB_PRECISE_FAULTS only once, at the first Process construction it triggers.
             ZBridge.setPreciseFaults(record.preciseFaults);
