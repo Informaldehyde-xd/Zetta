@@ -1,6 +1,7 @@
 // JNI host calls: classes, member ids, reflection, objects, references, monitors, exceptions.
 #include "host_jni_internal.h"
 
+#include <atomic>
 #include <cstdlib>
 
 #include "zb/jni_shorty.h"
@@ -31,7 +32,16 @@ bool HostJni::Impl::serve_objects(JniCall& call) {
         const std::string method = read_string(env, call.arg(1), name);
         const std::string signature = read_string(env, call.arg(2), name);
         const JniBackend::Id id = backend.get_method_id(env, cls, method.c_str(), signature.c_str(), call.arg(3) != 0);
-        if (id == 0) return true;
+        if (id == 0) {
+            // A lookup that fails leaves NoSuchMethodError pending in ART, and the next JNI call
+            // made with it pending aborts the process. Old native code often probes for methods
+            // that newer classes lack and just carries on, so the exception is cleared here (the
+            // zero id already tells the caller). Logged for the first few misses only.
+            static std::atomic<unsigned> misses{0};
+            if (misses.fetch_add(1) < 20) log("GetMethodID failed: %s %s (exception cleared)", method.c_str(), signature.c_str());
+            backend.exception_clear(env);
+            return true;
+        }
         const std::optional<std::string> shorty = shorty_from_signature(signature);
         if (!shorty) fatal(env, "GetMethodID: the backend accepted a malformed signature %s", signature.c_str());
         write_shorty(env, call.arg(4), *shorty, name);

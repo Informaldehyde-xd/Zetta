@@ -3,6 +3,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -16,6 +17,9 @@
 namespace zb {
 
 namespace {
+
+// The handle (guest-side value) of the most recent eglCreateContext result, for the swap recovery below.
+std::atomic<std::uint32_t> g_last_context_handle{0};
 
 // EGL errors are per-thread and sticky until eglGetError reads them. A call rejected here never
 // reaches the driver, so its error is recorded on this side and shadows the driver's.
@@ -237,8 +241,31 @@ bool HostEgl::handle_host_call(std::uint32_t index, GuestThread& thread) {
     if (index == ZB_EGL_HC_eglMakeCurrent) {
         runtime_report().note_egl_current(static_cast<std::uint64_t>(::syscall(SYS_gettid)));
     }
+    // A swap on a thread that has no context current fails (EGL_BAD_CONTEXT) and the screen stays
+    // black. That happens when a game swaps from a thread other than the one that made its context
+    // current. Only in that case, and only when the game's own context is free, make it current here
+    // first. A thread that already has a context (every game that works today) is left alone.
+    if (index == ZB_EGL_HC_eglSwapBuffers) {
+        const std::uint32_t saved = g_last_context_handle.load(std::memory_order_relaxed);
+        if (saved != 0 && reinterpret_cast<std::uintptr_t>(backend_.eglGetCurrentContext()) == 0) {
+            Call swap(*this, thread, index);
+            const auto context = lookup(saved, EglObject::Context);
+            const void* display = swap.handle_of(0, EglObject::Display);
+            const void* surface = swap.handle_of(1, EglObject::Surface);
+            if (context && *context != nullptr && display != nullptr && surface != nullptr &&
+                backend_.eglMakeCurrent(const_cast<EGLDisplay>(display), const_cast<EGLSurface>(surface),
+                                        const_cast<EGLSurface>(surface), const_cast<EGLContext>(*context))) {
+                static std::atomic<bool> noted{false};
+                if (!noted.exchange(true)) log("EGL: swap on a thread without a current context; the game's context was made current");
+                runtime_report().note_egl_current(static_cast<std::uint64_t>(::syscall(SYS_gettid)));
+            }
+        }
+    }
     Call call(*this, thread, index);
     if (dispatch(call)) {
+        if (index == ZB_EGL_HC_eglCreateContext && thread.regs()[0] != 0) {
+            g_last_context_handle.store(thread.regs()[0], std::memory_order_relaxed);
+        }
         const std::uint64_t slot = g_recent_egl_next.fetch_add(1, std::memory_order_relaxed) % kRecentEglCalls;
         g_recent_egl[slot].index.store(index, std::memory_order_relaxed);
         g_recent_egl[slot].result.store(thread.regs()[0], std::memory_order_relaxed);

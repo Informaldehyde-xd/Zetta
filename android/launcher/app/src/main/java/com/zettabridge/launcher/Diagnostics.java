@@ -3,6 +3,7 @@ package com.zettabridge.launcher;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.os.Build;
 import android.util.Log;
 
 import com.zettabridge.core.ZBridge;
@@ -30,6 +31,13 @@ final class Diagnostics {
 
     private Diagnostics() {}
 
+    private static volatile File externalDir;
+
+    /** The launcher's external files folder as the :guest process found it, or null before the report starts. */
+    static File externalFilesDir() {
+        return externalDir;
+    }
+
     /** The runtime report file, or null when external storage is unavailable. */
     static File runtimeReportFile(Context context) {
         File dir = context.getExternalFilesDir(null);
@@ -46,6 +54,7 @@ final class Diagnostics {
             Log.w(TAG, "no external files dir: the runtime report is not persisted");
             return;
         }
+        externalDir = file.getParentFile();
         try {
             if (!ZBridge.setReportFile(file.getAbsolutePath())) {
                 Log.w(TAG, "cannot persist the runtime report to " + file);
@@ -116,5 +125,41 @@ final class Diagnostics {
         } catch (Exception e) {
             Log.w(TAG, "cannot write the error file: " + e);
         }
+    }
+
+    private static final String[] EVIDENCE_FILES = {"zb-errors.txt", "zb-abort.txt", "zb-guestabort.txt", "zb-freeze.txt"};
+
+    /**
+     * Everything a run leaves behind besides the counters, as one text for the "Last run report"
+     * screen: the phone, the Java errors, the abort and freeze dumps. A phone without root cannot
+     * open Android/data, so this screen and the clipboard are the way to get these files out.
+     */
+    static String readEvidence(Context context) {
+        StringBuilder out = new StringBuilder();
+        out.append("=== device ===\n");
+        out.append("model: ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL).append('\n');
+        out.append("android: ").append(Build.VERSION.RELEASE).append(" (sdk ").append(Build.VERSION.SDK_INT).append(")\n");
+        out.append("kernel: ").append(System.getProperty("os.version")).append('\n');
+        out.append("phone abis: ").append(java.util.Arrays.toString(Build.SUPPORTED_ABIS)).append('\n');
+        out.append("all files access: ").append(StorageAccess.hasAccess(context) ? "yes" : "no").append('\n');
+        File dir = context.getExternalFilesDir(null);
+        out.append("files dir: ").append(dir).append('\n');
+        if (dir == null) return out.toString();
+        for (String name : EVIDENCE_FILES) {
+            File file = new File(dir, name);
+            if (!file.isFile() || file.length() == 0) continue;
+            try {
+                String text = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+                final int limit = name.equals("zb-errors.txt") ? 6000 : 4000;
+                // Errors are appended, so the newest are at the end; the dumps are rewritten, so the start is the news.
+                String part = name.equals("zb-errors.txt") && text.length() > limit
+                        ? "...\n" + text.substring(text.length() - limit)
+                        : (text.length() > limit ? text.substring(0, limit) + "\n..." : text);
+                out.append("\n=== ").append(name).append(" ===\n").append(part).append('\n');
+            } catch (IOException | RuntimeException e) {
+                out.append("\n=== ").append(name).append(" (cannot read: ").append(e).append(") ===\n");
+            }
+        }
+        return out.toString();
     }
 }

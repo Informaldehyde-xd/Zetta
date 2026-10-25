@@ -236,6 +236,9 @@ JniLoadReport JniLoader::load(JniBackend::Env env, const std::string& path,
             return report;
         }
         if (backend_.exception_check(env)) {
+            // Print the Java stack to logcat before it is lost: it names the missing class or method.
+            log("JNI_OnLoad of %s left a pending Java exception:", library.c_str());
+            backend_.exception_describe(env);
             runtime_report().note_jni_onload(library, false, 0);
             report.error = "guest JNI_OnLoad left a pending Java exception";
             return report;

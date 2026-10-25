@@ -24,7 +24,7 @@ import java.io.IOException;
  */
 final class AspectLetterbox {
     private static final String TAG = "zb-launcher";
-    private static final String FILE =
+    private static final String FALLBACK_FILE =
             "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-aspect.txt";
 
     private AspectLetterbox() {}
@@ -51,10 +51,16 @@ final class AspectLetterbox {
         Log.i(TAG, "aspect ratio " + ratio + " applied");
     }
 
+    /** zb-aspect.txt in the launcher's external files folder, wherever this phone puts it. */
+    private static File settingsFile() {
+        final File dir = Diagnostics.externalFilesDir();
+        return dir != null ? new File(dir, "zb-aspect.txt") : new File(FALLBACK_FILE);
+    }
+
     private static float readRatio(String packageName) {
         float fallback = 0f;
         float specific = 0f;
-        try (BufferedReader in = new BufferedReader(new FileReader(new File(FILE)))) {
+        try (BufferedReader in = new BufferedReader(new FileReader(settingsFile()))) {
             String line;
             while ((line = in.readLine()) != null) {
                 line = line.trim();

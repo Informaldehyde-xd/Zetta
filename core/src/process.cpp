@@ -36,6 +36,7 @@
 #include "zb/log.h"
 #include "zb/host_egl.h"
 #include "zb/host_jni.h"
+#include "zb/external_dir.h"
 #include "zb/runtime_report.h"
 #include "zb/syscalls.h"
 
@@ -105,14 +106,20 @@ std::pair<const char*, const char*> host_call_name(std::uint32_t index) {
 namespace {
 
 // Same directory as zb-runtime-report.txt. Change the package name if you rename it.
-constexpr const char* kProfileFile = "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-profile.txt";
-constexpr const char* kDumpRequestFile = "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-dump-now";
-constexpr const char* kFreezeFile = "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-freeze.txt";
-constexpr const char* kPcProfileFile = "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-pcprofile.txt";
+// zb-profile.txt lives in the launcher's external files folder (zb::external_file_path)
+inline std::string kProfileFile() { return external_file_path("zb-profile.txt"); }
+// zb-dump-now lives in the launcher's external files folder (zb::external_file_path)
+inline std::string kDumpRequestFile() { return external_file_path("zb-dump-now"); }
+// zb-freeze.txt lives in the launcher's external files folder (zb::external_file_path)
+inline std::string kFreezeFile() { return external_file_path("zb-freeze.txt"); }
+// zb-pcprofile.txt lives in the launcher's external files folder (zb::external_file_path)
+inline std::string kPcProfileFile() { return external_file_path("zb-pcprofile.txt"); }
 // The latest busy window is replaced as the game goes on (a pause or a menu would otherwise
 // overwrite the interesting one), so the busiest window seen so far is kept in a file of its own.
-constexpr const char* kProfileBestFile = "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-profile-busiest.txt";
-constexpr const char* kPcProfileBestFile = "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-pcprofile-busiest.txt";
+// zb-profile-busiest.txt lives in the launcher's external files folder (zb::external_file_path)
+inline std::string kProfileBestFile() { return external_file_path("zb-profile-busiest.txt"); }
+// zb-pcprofile-busiest.txt lives in the launcher's external files folder (zb::external_file_path)
+inline std::string kPcProfileBestFile() { return external_file_path("zb-pcprofile-busiest.txt"); }
 constexpr std::size_t kProfileSlots = 0x10000;  // a host call index is 16 bits
 constexpr std::chrono::seconds kProfileWindow{5};
 constexpr std::size_t kProfileRows = 18;
@@ -705,7 +712,8 @@ namespace {
 
 constexpr const char* kAbortTag = "zb-abort";
 // Same directory as zb-runtime-report.txt and zb-errors.txt. Change the package name if you rename it.
-constexpr const char* kAbortFile = "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-abort.txt";
+// zb-abort.txt lives in the launcher's external files folder (zb::external_file_path)
+inline std::string kAbortFile() { return external_file_path("zb-abort.txt"); }
 constexpr int kMaxHostFrames = 40;
 constexpr int kMaxGuestStackHits = 40;
 constexpr std::uint32_t kGuestStackScanWords = 1024;  // 4 KiB above sp
@@ -769,7 +777,7 @@ void Process::install_terminate_reporter() {
 
         // The abort recorder (see the block above). Installed after the system's own handler, so
         // that one is called last.
-        g_abort_fd = ::open(kAbortFile, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+        g_abort_fd = ::open(kAbortFile().c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
         struct sigaction action;
         std::memset(&action, 0, sizeof action);
         action.sa_sigaction = +[](int sig, siginfo_t* info, void* context) {
@@ -917,10 +925,10 @@ void Process::install_terminate_reporter() {
                                   1000.0 * ms / static_cast<double>(rows[r].calls), 100.0 * ms / window_ms);
                     text += line;
                 }
-                write_text_file(kProfileFile, text);
+                write_text_file(kProfileFile().c_str(), text);
                 if (total_calls > busiest_calls) {
                     busiest_calls = total_calls;
-                    write_text_file(kProfileBestFile, text);
+                    write_text_file(kProfileBestFile().c_str(), text);
                 }
             }
         }).detach();
@@ -1004,7 +1012,7 @@ void Process::install_terminate_reporter() {
                 bool manual_dump = false;
                 if (now - last_dump_check >= std::chrono::milliseconds(500)) {
                     last_dump_check = now;
-                    manual_dump = (::access(kDumpRequestFile, F_OK) == 0);
+                    manual_dump = (::access(kDumpRequestFile().c_str(), F_OK) == 0);
                 }
                 if (!manual_dump && now - window_start < std::chrono::seconds(10)) continue;
                 const double seconds = std::chrono::duration<double>(now - window_start).count();
@@ -1110,8 +1118,8 @@ void Process::install_terminate_reporter() {
                         }
                     }
                     freeze += "\nrecent-jni-calls: " + jni_recent_calls().substr(0, 1500) + "\n";
-                    write_text_file(kFreezeFile, freeze);
-                    if (manual_dump) ::unlink(kDumpRequestFile);
+                    write_text_file(kFreezeFile().c_str(), freeze);
+                    if (manual_dump) ::unlink(kDumpRequestFile().c_str());
                 }
 
                 if (busiest.empty() || static_cast<double>(busiest.front().first) < 0.05 * window_ticks) {
@@ -1190,10 +1198,10 @@ void Process::install_terminate_reporter() {
                 }
                 per_thread.clear();
                 hits.clear();
-                write_text_file(kPcProfileFile, text);
+                write_text_file(kPcProfileFile().c_str(), text);
                 if (busiest.front().first > busiest_cpu) {
                     busiest_cpu = busiest.front().first;
-                    write_text_file(kPcProfileBestFile, text);
+                    write_text_file(kPcProfileBestFile().c_str(), text);
                 }
             }
         }).detach();

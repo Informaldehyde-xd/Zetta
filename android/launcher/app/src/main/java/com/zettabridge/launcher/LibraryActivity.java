@@ -186,6 +186,7 @@ public class LibraryActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        StorageAccess.ensure(this);
         refresh();
     }
 
@@ -372,13 +373,15 @@ public class LibraryActivity extends Activity {
      */
     private void showRuntimeReport(PluginRecord r) {
         String report = Diagnostics.readRuntimeReport(this);
-        if (report == null) {
+        String evidence = Diagnostics.readEvidence(this);
+        if (report == null && evidence.indexOf("\n=== ") < 0) {
             Toast.makeText(this, "No run report yet. Launch " + r.label + " once, then look again.",
                     Toast.LENGTH_LONG).show();
             return;
         }
         File file = Diagnostics.runtimeReportFile(this);
-        String text = report + (file != null ? "\nfile: " + file.getAbsolutePath() + "\n" : "");
+        String text = (report != null ? report : "(no runtime report was written)\n")
+                + (file != null ? "\nfile: " + file.getAbsolutePath() + "\n" : "") + "\n" + evidence;
         boolean copied = Diagnostics.copy(this, "ZettaBridge run report", text);
 
         TextView view = new TextView(this);

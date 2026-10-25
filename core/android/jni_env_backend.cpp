@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "zb/jni_descriptor.h"
+#include "zb/external_dir.h"
 #include "zb/runtime_report.h"
 
 namespace zb {
@@ -23,11 +24,11 @@ namespace {
 // it. If <external files dir>/zb-dpi.txt holds a number (for example 200), the guest gets that
 // number instead. The file is read on every call, so it can be changed between runs without
 // rebuilding or re-importing the game. Without the file nothing changes.
-constexpr const char* kDpiFile = "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-dpi.txt";
+// zb-dpi.txt lives in the launcher's external files folder (zb::external_file_path)
 std::atomic<jmethodID> g_screen_dpi_method{nullptr};
 
 float read_dpi_override() {
-    std::FILE* file = std::fopen(kDpiFile, "r");
+    std::FILE* file = std::fopen(external_file_path("zb-dpi.txt").c_str(), "r");
     if (file == nullptr) return 0.0f;
     char text[64] = {};
     const std::size_t length = std::fread(text, 1, sizeof text - 1, file);

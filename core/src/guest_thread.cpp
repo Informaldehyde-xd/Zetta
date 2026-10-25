@@ -1,3 +1,4 @@
+#include "zb/external_dir.h"
 #include "zb/guest_thread.h"
 
 #include <linux/futex.h>
@@ -41,12 +42,12 @@ constexpr Dynarmic::HaltReason kMemoryAbortHalt = Dynarmic::HaltReason::MemoryAb
 //                      Results can differ in the last bits, which games rarely notice.
 //   fast_exclusive=1   ldrex/strex (atomics, locks) use the direct memory pointer
 // The file is read once; a change needs a new start of the game.
-constexpr const char* kTuningFile = "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-tuning.txt";
+// zb-tuning.txt lives in the launcher's external files folder (zb::external_file_path)
 
 bool tuning(const char* name) {
     static const std::string text = [] {
         std::string content;
-        if (std::FILE* file = std::fopen(kTuningFile, "re")) {
+        if (std::FILE* file = std::fopen(external_file_path("zb-tuning.txt").c_str(), "re")) {
             char buffer[512];
             std::size_t got;
             while ((got = std::fread(buffer, 1, sizeof buffer, file)) > 0) content.append(buffer, got);

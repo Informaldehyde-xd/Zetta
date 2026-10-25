@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "guest_jni_runtime.h"
+#include "zb/external_dir.h"
 #include "zb/elf_fixups.h"
 #include "zb/log.h"
 #include "zb/runtime_report.h"
@@ -177,6 +178,10 @@ JNIEXPORT jboolean JNICALL Java_com_zettabridge_core_ZBridge_setReportFile(JNIEn
         throw_new(env, "java/lang/NullPointerException", "path");
         return JNI_FALSE;
     }
+    // The report sits in the launcher's external files folder; every other dump and setting file
+    // of the runtime lives next to it.
+    const std::size_t slash = file->find_last_of('/');
+    if (slash != std::string::npos && slash > 0) zb::set_external_files_dir(file->substr(0, slash));
     return zb::write_runtime_report_to(zb::runtime_report(), *file) ? JNI_TRUE : JNI_FALSE;
 }
 

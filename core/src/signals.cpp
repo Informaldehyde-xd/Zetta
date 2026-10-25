@@ -13,6 +13,7 @@
 #include <cstring>
 #include <string>
 
+#include "zb/external_dir.h"
 #include "zb/host_jni.h"
 #include "zb/log.h"
 #include "zb/process.h"
@@ -175,8 +176,7 @@ bool Process::dispatch_pending_signals(GuestThread& thread) {
             // as library + offset, the registers, every word on the stack that points into guest
             // code (a poor man's backtrace), and the last Java calls. Same folder as the report.
             {
-                constexpr const char* kGuestAbortFile =
-                    "/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-guestabort.txt";
+                const std::string guest_abort_file = external_file_path("zb-guestabort.txt");
                 const auto& r = thread.regs();
                 std::string text;
                 char line[400];
@@ -205,7 +205,7 @@ bool Process::dispatch_pending_signals(GuestThread& thread) {
                 }
                 text += "recent-jni-calls: " + jni_recent_calls().substr(0, 1500) + "\n";
                 log("%s", text.c_str());
-                const int fd = ::open(kGuestAbortFile, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+                const int fd = ::open(guest_abort_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
                 if (fd >= 0) {
                     [[maybe_unused]] const ssize_t written = ::write(fd, text.data(), text.size());
                     ::close(fd);
