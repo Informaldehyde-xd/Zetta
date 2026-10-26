@@ -56,6 +56,16 @@ final class GuestInstrumentation extends Instrumentation {
     }
 
     @Override
+    public void callActivityOnPause(Activity activity) {
+        final PauseWatchdog watchdog = PauseWatchdog.start(activity);
+        try {
+            super.callActivityOnPause(activity);
+        } finally {
+            watchdog.finish();
+        }
+    }
+
+    @Override
     public void callActivityOnDestroy(Activity activity) {
         base.callActivityOnDestroy(activity);
         runtime.onActivityDestroyed(activity);
