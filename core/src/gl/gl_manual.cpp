@@ -1,3 +1,4 @@
+#include "zb/runtime_report.h"
 #include "zb/host_gl.h"
 
 #include <algorithm>
@@ -718,6 +719,12 @@ bool zbgl_manual_glGetString(HostGl& host, HostGl::Call& call) {
     }
     std::memcpy(destination, source, length + 1);
     current.strings[name] = *address;
+    // The phone's GPU, for the run report: the first thing to look at when a game works on one phone
+    // and not on another (GL_VENDOR 0x1F00, GL_RENDERER 0x1F01, GL_VERSION 0x1F02).
+    if (name == 0x1F00u || name == 0x1F01u || name == 0x1F02u) {
+        runtime_report().note_gl_detail(name == 0x1F00u ? "driver-vendor" : name == 0x1F01u ? "driver-renderer" : "driver-version",
+                                        std::string(reinterpret_cast<const char*>(source), length), true);
+    }
     call.set_result(*address);
     return true;
 }

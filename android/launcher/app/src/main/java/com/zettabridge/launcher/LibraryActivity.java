@@ -61,6 +61,12 @@ public class LibraryActivity extends Activity {
         root.addView(importButton, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        Button checkButton = new Button(this);
+        checkButton.setText("Compatibility check");
+        checkButton.setOnClickListener(v -> showCompatCheck());
+        root.addView(checkButton, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
         emptyView = new TextView(this);
         emptyView.setText("No apps yet. Import an APK to add one. Tap to launch, long-press for more.");
         emptyView.setPadding(0, pad, 0, pad);
@@ -293,10 +299,28 @@ public class LibraryActivity extends Activity {
         }, "zb-import").start();
     }
 
+    private static final java.util.Set<String> WARNED = new java.util.HashSet<>();
+
     private void launch(PluginRecord r) {
         if (!r.isLaunchable()) {
             Toast.makeText(this, r.label + ": " + r.status(), Toast.LENGTH_LONG).show();
             return;
+        }
+        // Tell the person, once per game and start, what this phone is known to lack, instead of
+        // letting the game fail with a black screen.
+        if (r.isTranslated() && !WARNED.contains(r.packageName)) {
+            final String warnings = CompatCheck.preflightWarnings(this);
+            if (!warnings.isEmpty()) {
+                WARNED.add(r.packageName);
+                new AlertDialog.Builder(this)
+                        .setTitle(r.label)
+                        .setMessage("This phone may have trouble with this game:\n\n" + warnings)
+                        .setPositiveButton("Launch anyway", (dialog, which) ->
+                                startActivity(PluginSwitchActivity.intent(this, r.packageName)))
+                        .setNegativeButton("Cancel", null)
+                        .show();
+                return;
+            }
         }
         startActivity(PluginSwitchActivity.intent(this, r.packageName));
     }
@@ -371,6 +395,24 @@ public class LibraryActivity extends Activity {
      * output, so this file is the only evidence a device run leaves behind. The text also goes to
      * the clipboard, ready to be sent back.
      */
+    /** Describes this phone and its graphics driver, and copies the text so it can be pasted into a bug report. */
+    private void showCompatCheck() {
+        String text = CompatCheck.run(this);
+        boolean copied = Diagnostics.copy(this, "ZettaBridge compatibility check", text);
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextIsSelectable(true);
+        view.setTypeface(Typeface.MONOSPACE);
+        view.setPadding(dp(16), dp(8), dp(16), dp(8));
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(view);
+        new AlertDialog.Builder(this)
+                .setTitle(copied ? "Compatibility check (copied)" : "Compatibility check")
+                .setView(scroll)
+                .setPositiveButton("Close", null)
+                .show();
+    }
+
     private void showRuntimeReport(PluginRecord r) {
         String report = Diagnostics.readRuntimeReport(this);
         String evidence = Diagnostics.readEvidence(this);

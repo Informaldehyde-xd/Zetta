@@ -60,7 +60,22 @@ public:
 private:
     void set_flags(std::uint32_t addr, std::uint64_t len, std::uint8_t flags);
 
+    // The guest has 4 KiB pages. On a phone whose kernel uses bigger pages (16 KiB on some Android
+    // 15+ devices) a host page holds several guest pages, which cannot be mapped or protected one by
+    // one. Those phones take the "coarse" paths below; with 4 KiB host pages nothing changes.
+    bool coarse() const { return host_page_ > kPageSize; }
+    std::uint64_t host_floor(std::uint64_t a) const { return a & ~static_cast<std::uint64_t>(host_page_ - 1); }
+    std::uint64_t host_ceil(std::uint64_t a) const { return (a + host_page_ - 1) & ~static_cast<std::uint64_t>(host_page_ - 1); }
+    bool group_empty(std::uint64_t host_addr) const;
+    bool ensure_host_pages(std::uint32_t addr, std::uint64_t len);
+    bool refresh_host_prot(std::uint32_t addr, std::uint64_t len);
+    bool map_anon_coarse(std::uint32_t addr, std::uint64_t len, int prot);
+    bool map_file_coarse(std::uint32_t addr, std::uint64_t len, int prot, int share_flags, int fd, std::uint64_t offset);
+    bool protect_coarse(std::uint32_t addr, std::uint64_t len, int prot);
+    bool unmap_coarse(std::uint32_t addr, std::uint64_t len);
+
     std::uint8_t* base_ = nullptr;
+    std::uint32_t host_page_ = kPageSize;
     std::vector<std::uint8_t> pages_;
 };
 

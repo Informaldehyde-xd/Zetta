@@ -1,7 +1,11 @@
 // JNI host calls: method calls and fields.
 #include "host_jni_internal.h"
 
+#include "zb/log.h"
+#include "zb/options.h"
+
 #include <array>
+#include <atomic>
 #include <cstring>
 
 namespace zb {
@@ -116,6 +120,18 @@ bool HostJni::Impl::serve_values(JniCall& call) {
         }
         const JValue result =
             backend.call_method(env, static_cast<JniCallKind>(kind), type, obj, cls, id, values.data());
+        // Old native code never checks for a Java exception after a call, and a modern runtime that finds
+        // one still pending can abort on the very next JNI call (or the game goes on with a poisoned state).
+        // The exception is cleared here; the result already tells the game the call did not work.
+        static const bool clear_exceptions = option_enabled("jni_clear_exceptions", true);
+        if (clear_exceptions && backend.exception_check(env)) {
+            static std::atomic<unsigned> shown{0};
+            if (shown.fetch_add(1) < 10) {
+                log("a Java exception from a JNI method call was cleared (the first 10 are printed):");
+                backend.exception_describe(env);
+            }
+            backend.exception_clear(env);
+        }
         if (type == 'L') {
             call.set(local(state, result.l));
         } else if (type != 'V') {

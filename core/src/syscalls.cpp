@@ -1,3 +1,4 @@
+#include "zb/options.h"
 #include "zb/syscalls.h"
 
 #include <fcntl.h>
@@ -1253,7 +1254,9 @@ bool handle_syscall(Process& proc, GuestThread& thread) {
     // pending bit, then looks at this flag, so one side always sees the other.
     std::optional<BlockingSection> interruptible;
     bool signalled_before_waiting = false;
-    if (syscall_may_block(nr)) {
+    // Off unless zb-options.txt asks for it: a build without this wrapper crashes less (see options.h).
+    static const bool interruptible_syscalls = option_enabled("interruptible_syscalls", false);
+    if (interruptible_syscalls && syscall_may_block(nr)) {
         interruptible.emplace(thread);
         signalled_before_waiting = syscall_only_waits(nr) && has_deliverable_signal(thread);
     }

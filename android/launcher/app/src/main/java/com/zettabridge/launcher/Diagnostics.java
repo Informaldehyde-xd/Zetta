@@ -127,7 +127,8 @@ final class Diagnostics {
         }
     }
 
-    private static final String[] EVIDENCE_FILES = {"zb-errors.txt", "zb-abort.txt", "zb-guestabort.txt", "zb-freeze.txt"};
+    private static final String[] EVIDENCE_FILES = {"zb-errors.txt", "zb-abort.txt", "zb-guestabort.txt", "zb-freeze.txt",
+            "zb-profile-busiest.txt", "zb-pcprofile-busiest.txt"};
 
     /**
      * Everything a run leaves behind besides the counters, as one text for the "Last run report"

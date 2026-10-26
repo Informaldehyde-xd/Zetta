@@ -1,4 +1,5 @@
 #include "zb/host_egl.h"
+#include "zb/options.h"
 
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -247,7 +248,9 @@ bool HostEgl::handle_host_call(std::uint32_t index, GuestThread& thread) {
     // first. A thread that already has a context (every game that works today) is left alone.
     if (index == ZB_EGL_HC_eglSwapBuffers) {
         const std::uint32_t saved = g_last_context_handle.load(std::memory_order_relaxed);
-        if (saved != 0 && reinterpret_cast<std::uintptr_t>(backend_.eglGetCurrentContext()) == 0) {
+        // zb-options.txt "egl_force_current=1": do it before every swap, not only when none is current.
+        static const bool force_current = option_enabled("egl_force_current", false);
+        if (saved != 0 && (force_current || reinterpret_cast<std::uintptr_t>(backend_.eglGetCurrentContext()) == 0)) {
             Call swap(*this, thread, index);
             const auto context = lookup(saved, EglObject::Context);
             const void* display = swap.handle_of(0, EglObject::Display);
