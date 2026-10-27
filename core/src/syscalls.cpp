@@ -1,4 +1,5 @@
 #include "zb/options.h"
+#include "profile_extra.h"
 #include "zb/syscalls.h"
 
 #include <fcntl.h>
@@ -1247,8 +1248,13 @@ bool handle_syscall(Process& proc, GuestThread& thread) {
     // futex, a poll) reads differently from a thread that merely stopped calling out.
     struct ActivityDone {
         std::int32_t tid;
-        ~ActivityDone() { record_thread_activity_done(tid); }
-    } activity_done{guest_tid()};
+        std::uint32_t nr;
+        std::uint64_t started;
+        ~ActivityDone() {
+            record_thread_activity_done(tid);
+            account_syscall(nr, profile_ticks() - started);  // zb-syscalls.txt
+        }
+    } activity_done{guest_tid(), nr, profile_ticks()};
 
     // Marked before the pending signals are read, the order post_signal() relies on: it sets the
     // pending bit, then looks at this flag, so one side always sees the other.

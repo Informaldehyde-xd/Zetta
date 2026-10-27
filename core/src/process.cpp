@@ -36,6 +36,7 @@
 #include "zb/log.h"
 #include "zb/host_egl.h"
 #include "zb/host_jni.h"
+#include "profile_extra.h"
 #include "zb/external_dir.h"
 #include "zb/runtime_report.h"
 #include "zb/syscalls.h"
@@ -865,6 +866,8 @@ void Process::install_terminate_reporter() {
         if (sigaction(SIGABRT, &action, &g_previous_abort) != 0) {
             log("cannot install the abort recorder: %s", std::strerror(errno));
         }
+
+        start_extra_profiler();  // zb-syscalls.txt and zb-memory.txt
 
         // The host call profiler: a background thread that turns the counters above into a file.
         std::thread([] {
