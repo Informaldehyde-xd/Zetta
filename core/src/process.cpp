@@ -1067,18 +1067,21 @@ void Process::install_terminate_reporter() {
                     struct Snapshot {
                         std::int32_t tid;
                         std::uint32_t pc, lr, sp;
+                        std::uint64_t pending, blocked;  // guest signals: waiting for delivery / masked (bit n-1 = signal n)
+                        bool borrowed;                   // a Java thread running guest code, not a guest-created thread
                     };
                     std::vector<Snapshot> snapshots;
                     {
                         std::lock_guard<std::mutex> lock(process->threads_mutex_);
-                        auto take = [&](GuestThread* thread) {
+                        auto take = [&](GuestThread* thread, bool borrowed) {
                             const auto& r = thread->regs();
-                            snapshots.push_back({thread->tid, r[15], r[14], r[13]});
+                            snapshots.push_back({thread->tid, r[15], r[14], r[13], thread->pending_signals(),
+                                                 thread->sigmask, borrowed});
                         };
-                        for (GuestThread* thread : process->threads_) take(thread);
+                        for (GuestThread* thread : process->threads_) take(thread, false);
                         for (GuestThread* thread : process->borrowers_) {
                             if (std::find(process->threads_.begin(), process->threads_.end(), thread) == process->threads_.end())
-                                take(thread);
+                                take(thread, true);
                         }
                     }
                     const std::vector<ThreadActivitySample> waiting = snapshot_thread_activity();
@@ -1126,6 +1129,14 @@ void Process::install_terminate_reporter() {
                                           static_cast<int>(snap.tid), name, state, doing.c_str(), snap.pc,
                                           process->describe_address(snap.pc & ~1u).c_str(), snap.lr,
                                           process->describe_address(snap.lr & ~1u).c_str());
+                            freeze += row;
+                            // A garbage collector that stops the world sends every thread a signal (SIGPWR,
+                            // 30, is bit 29 = 0x20000000) and waits for each to answer. A thread with the
+                            // signal pending and unblocked has not run its handler: that is who it waits for.
+                            std::snprintf(row, sizeof row, "  guest signals: pending %016llx, blocked %016llx%s%s\n",
+                                          static_cast<unsigned long long>(snap.pending), static_cast<unsigned long long>(snap.blocked),
+                                          (snap.pending & ~snap.blocked) != 0 ? "  <-- NOT DELIVERED YET" : "",
+                                          snap.borrowed ? "  (Java thread running guest code)" : "");
                             freeze += row;
                             int shown = 0;
                             for (std::uint32_t i = 0; i < 512 && shown < 6; ++i) {
