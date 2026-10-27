@@ -37,6 +37,7 @@
 #include "zb/host_egl.h"
 #include "zb/host_jni.h"
 #include "profile_extra.h"
+#include "zb/diagnostics.h"
 #include "zb/external_dir.h"
 #include "zb/runtime_report.h"
 #include "zb/syscalls.h"
@@ -157,6 +158,7 @@ inline void write_text_file(const char* path, const std::string& text) {
 }
 
 inline void account_host_call(std::uint32_t index, std::uint64_t started) {
+    if (!diagnostics_enabled()) return;
     const std::uint64_t elapsed = read_ticks() - started;
     g_host_call_count[index & 0xFFFF].fetch_add(1, std::memory_order_relaxed);
     g_host_call_ticks[index & 0xFFFF].fetch_add(elapsed, std::memory_order_relaxed);
@@ -890,6 +892,7 @@ void Process::install_terminate_reporter() {
 
         // The host call profiler: a background thread that turns the counters above into a file.
         std::thread([] {
+            if (!diagnostics_enabled()) return;  // the fast build has no profiler threads at all
             const std::uint64_t frequency = tick_frequency();
             std::vector<std::uint64_t> seen_count(kProfileSlots, 0);
             std::vector<std::uint64_t> seen_ticks(kProfileSlots, 0);
@@ -965,6 +968,7 @@ void Process::install_terminate_reporter() {
         // that is parked sits in the guest's own start-up program ("zbhost"); those samples are
         // left out of the percentages.
         std::thread([] {
+            if (!diagnostics_enabled()) return;
             struct Counters {
                 std::uint32_t samples = 0;
                 std::uint32_t in_host_call = 0;

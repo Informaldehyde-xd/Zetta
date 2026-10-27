@@ -57,11 +57,11 @@ final class GuestInstrumentation extends Instrumentation {
 
     @Override
     public void callActivityOnPause(Activity activity) {
-        final PauseWatchdog watchdog = PauseWatchdog.start(activity);
+        final PauseWatchdog watchdog = Diagnostics.toolsEnabled(activity) ? PauseWatchdog.start(activity) : null;
         try {
             super.callActivityOnPause(activity);
         } finally {
-            watchdog.finish();
+            if (watchdog != null) watchdog.finish();
         }
     }
 

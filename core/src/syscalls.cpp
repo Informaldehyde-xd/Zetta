@@ -1,5 +1,6 @@
 #include "zb/options.h"
 #include "profile_extra.h"
+#include "zb/diagnostics.h"
 #include "zb/syscalls.h"
 
 #include <fcntl.h>
@@ -1252,9 +1253,9 @@ bool handle_syscall(Process& proc, GuestThread& thread) {
         std::uint64_t started;
         ~ActivityDone() {
             record_thread_activity_done(tid);
-            account_syscall(nr, profile_ticks() - started);  // zb-syscalls.txt
+            if (started != 0) account_syscall(nr, profile_ticks() - started);  // zb-syscalls.txt (debug build)
         }
-    } activity_done{guest_tid(), nr, profile_ticks()};
+    } activity_done{guest_tid(), nr, diagnostics_enabled() ? profile_ticks() : 0};
 
     // Marked before the pending signals are read, the order post_signal() relies on: it sets the
     // pending bit, then looks at this flag, so one side always sees the other.

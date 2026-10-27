@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "guest_jni_runtime.h"
+#include "zb/diagnostics.h"
 #include "zb/external_dir.h"
 #include "zb/elf_fixups.h"
 #include "zb/log.h"
@@ -227,6 +228,13 @@ JNIEXPORT jstring JNICALL Java_com_zettabridge_core_ZBridge_fixGuestLibrary(JNIE
 // process-lifetime and reads ZB_PRECISE_FAULTS only at Process construction.
 JNIEXPORT void JNICALL Java_com_zettabridge_core_ZBridge_setPreciseFaults(JNIEnv*, jclass, jboolean enabled) {
     ::setenv("ZB_PRECISE_FAULTS", enabled ? "1" : "0", 1);
+}
+
+// static native void setDiagnostics(boolean enabled)
+// Turns the profilers and dump tools of the runtime on (debug build) or off (fast build). Called once at
+// start-up, before the guest runs.
+JNIEXPORT void JNICALL Java_com_zettabridge_core_ZBridge_setDiagnostics(JNIEnv*, jclass, jboolean enabled) {
+    zb::set_diagnostics_enabled(enabled != JNI_FALSE);
 }
 
 // static native void setGlDiagnostics(boolean enabled)

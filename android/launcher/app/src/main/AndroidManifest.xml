@@ -19,6 +19,8 @@
         android:label="ZettaBridge"
         android:icon="@mipmap/ic_launcher"
         android:theme="@android:style/Theme.Material.Light.DarkActionBar">
+        <!-- "true" in the debug build, "false" in the fast build (workflow: -PzbDiagnostics). -->
+        <meta-data android:name="zb.diagnostics" android:value="${zbDiagnostics}" />
 
         <activity
             android:name=".LibraryActivity"

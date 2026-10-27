@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "zb/diagnostics.h"
 #include "zb/external_dir.h"
 
 namespace zb {
@@ -126,6 +127,7 @@ void start_extra_profiler() {
     static std::once_flag once;
     std::call_once(once, [] {
         std::thread([] {
+            if (!diagnostics_enabled()) return;
             const double hz = static_cast<double>(frequency());
             std::vector<std::uint64_t> seen_calls(kSlots, 0), seen_ticks(kSlots, 0);
             auto window_start = std::chrono::steady_clock::now();

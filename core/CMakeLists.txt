@@ -22,6 +22,7 @@ add_library(zbcore STATIC
     src/gl/host_gles1.cpp
     src/external_dir.cpp
     src/options.cpp
+    src/diagnostics.cpp
     src/profile_extra.cpp
     src/initial_stack.cpp
     src/jni/descriptor.cpp

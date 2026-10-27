@@ -48,6 +48,27 @@ final class Diagnostics {
      * Makes the :guest process persist its runtime report. Called once, before plugin code runs;
      * failures are not fatal, the run simply leaves no report behind.
      */
+    private static Boolean toolsEnabled;
+
+    /**
+     * True in the debug build and false in the fast build. The workflow sets it through the manifest
+     * entry "zb.diagnostics"; a build made by hand without it counts as debug.
+     */
+    static synchronized boolean toolsEnabled(Context context) {
+        if (toolsEnabled == null) {
+            boolean enabled = true;
+            try {
+                android.content.pm.ApplicationInfo info = context.getPackageManager()
+                        .getApplicationInfo(context.getPackageName(), android.content.pm.PackageManager.GET_META_DATA);
+                if (info.metaData != null) enabled = !"false".equals(String.valueOf(info.metaData.get("zb.diagnostics")));
+            } catch (Exception e) {
+                Log.w(TAG, "cannot read the build kind: " + e);
+            }
+            toolsEnabled = enabled;
+        }
+        return toolsEnabled;
+    }
+
     static void startRuntimeReport(Context context) {
         File file = runtimeReportFile(context);
         if (file == null) {
@@ -55,6 +76,7 @@ final class Diagnostics {
             return;
         }
         externalDir = file.getParentFile();
+        ZBridge.setDiagnostics(toolsEnabled(context));
         try {
             if (!ZBridge.setReportFile(file.getAbsolutePath())) {
                 Log.w(TAG, "cannot persist the runtime report to " + file);

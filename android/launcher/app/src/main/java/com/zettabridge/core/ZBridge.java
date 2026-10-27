@@ -122,6 +122,9 @@ public final class ZBridge {
      */
     public static native void setPreciseFaults(boolean enabled);
 
+    /** Profilers and dump tools of the runtime: on in the debug build, off in the fast build. */
+    public static native void setDiagnostics(boolean enabled);
+
     /**
      * Sets ZB_GL_DIAGNOSTICS in this process's environment (setenv), which turns on the GL
      * instrumentation: whole-framebuffer readbacks, per-draw pixel diffs and ASCII frame maps.
