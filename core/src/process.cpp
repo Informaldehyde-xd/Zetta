@@ -383,6 +383,25 @@ std::string Process::translate_path(const char* guest_path) const {
                 // its icons (a font inside the APK) and no text at all until this fallback
                 // existed, because every /system/fonts lookup landed in the sysroot and failed.
                 if (::access(out.c_str(), F_OK) == 0) return out;
+                // A library the sysroot lacks may still be one the launcher ships itself (the
+                // graphics, android and compat stubs live in <runtime>/guest/lib). Look there before
+                // the device, whose /system/lib is empty on a phone without 32-bit support.
+                if (path.size() > 3 && path.substr(path.size() - 3) == ".so") {
+                    static constexpr std::string_view kSuffix = "/sysroot";
+                    const std::string_view root(sysroot_);
+                    if (root.size() > kSuffix.size() && root.substr(root.size() - kSuffix.size()) == kSuffix) {
+                        const std::string_view base = path.substr(path.rfind('/') + 1);
+                        std::string alt(root.substr(0, root.size() - kSuffix.size()));
+                        alt += "/guest/lib/";
+                        alt += base;
+                        if (::access(alt.c_str(), F_OK) == 0) {
+                            static std::atomic<unsigned> found{0};
+                            if (found.fetch_add(1) < 8) log("sysroot has no %.*s; using the launcher's own %s",
+                                                            static_cast<int>(path.size()), path.data(), alt.c_str());
+                            return alt;
+                        }
+                    }
+                }
                 static std::atomic<unsigned> fallbacks{0};
                 const unsigned seen = fallbacks.fetch_add(1) + 1;
                 if (seen <= 8) log("sysroot has no %.*s; using the device file",

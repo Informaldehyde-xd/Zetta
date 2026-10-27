@@ -27,6 +27,10 @@ final class RuntimeBundle {
         if (!version.isEmpty() && marker.isFile()
                 && version.equals(new String(Files.readAllBytes(marker.toPath()), StandardCharsets.US_ASCII).trim())
                 && requiredFilesPresent(target)) {
+            // The runtime is installed. Make sure every single file of it is still there: some phones and
+            // cleaners delete files of the app's private folder, and a missing stub library shows up as a
+            // game that cannot start. Missing files are copied again from the launcher's assets.
+            repairMissingFiles(context, target);
             return;
         }
 
@@ -60,6 +64,36 @@ final class RuntimeBundle {
             complete = true;
         } finally {
             if (!complete) PluginFiles.deleteRecursive(staging);
+        }
+    }
+
+    /** Copies every file listed in the bundle that is missing or empty from the assets again; nothing else is touched. */
+    private static void repairMissingFiles(Context context, File target) {
+        try (BufferedReader list = new BufferedReader(new InputStreamReader(
+                context.getAssets().open(FILE_LIST, AssetManager.ACCESS_STREAMING), StandardCharsets.UTF_8))) {
+            String asset;
+            int repaired = 0;
+            while ((asset = list.readLine()) != null) {
+                if (!asset.startsWith("zb/") || !PluginFiles.safeRelativePath(asset)) continue;
+                String relative = asset.substring(3);
+                if (!PluginFiles.safeRelativePath(relative)) continue;
+                File out = new File(target, relative);
+                if (out.isFile() && out.length() > 0) continue;
+                try (InputStream in = context.getAssets().open(asset, AssetManager.ACCESS_STREAMING)) {
+                    PluginFiles.copyAtomic(in, out);
+                    out.setReadOnly();
+                    if (relative.equals("guest/zbhost") || relative.equals("sysroot/system/bin/linker")) {
+                        out.setExecutable(true, true);
+                    }
+                    repaired++;
+                    android.util.Log.w("zb-launcher", "runtime file was missing, restored from the assets: " + relative);
+                } catch (IOException e) {
+                    android.util.Log.w("zb-launcher", "cannot restore runtime file " + relative + ": " + e);
+                }
+            }
+            if (repaired > 0) android.util.Log.w("zb-launcher", "restored " + repaired + " runtime file(s)");
+        } catch (IOException e) {
+            android.util.Log.w("zb-launcher", "cannot check the runtime files: " + e);
         }
     }
 
