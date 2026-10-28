@@ -1,7 +1,11 @@
-# Builds the ZettaBridge launcher APK on GitHub's servers (no PC needed).
+# Builds the ZettaBridge launcher on GitHub's servers (no PC needed) and produces TWO APKs:
+#   ZettaBridge-fast   no profilers, no dump tools: the one to play with
+#   ZettaBridge-debug  every profiler and dump tool on: the one to send logs from
+# The slow native part is built once ("native" job); the two APKs are then made side by side
+# ("apk" job, matrix) from the same native libraries, so the second APK costs a few minutes.
 #
 # Start it by hand: Actions tab -> "Build launcher" -> Run workflow. It also runs on every push to main.
-# The finished APK is attached to the run: open the run, scroll to "Artifacts", download, unzip, install.
+# The finished APKs are attached to the run: open the run, scroll to "Artifacts", download, unzip, install.
 #
 # What it does, in the repo's own order:
 #   1. fetch Dynarmic (the translator engine) and apply the repo's two patches to it
@@ -13,8 +17,9 @@
 # Optional signing (so every build can be installed over the previous one without uninstalling):
 # add four repository secrets (Settings -> Secrets and variables -> Actions):
 #   KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD
-# Without them the workflow builds a debug APK, which is signed with a different temporary key
-# each run, so Android will make you uninstall the old launcher first (and you lose imported games).
+# Without them each APK is signed with its own temporary key, so the fast and the debug APK
+# cannot be installed over each other (uninstall first, and imported games are lost). Add the
+# secrets to be able to switch between them freely.
 name: Build launcher
 
 on:
@@ -40,7 +45,7 @@ env:
   DYNARMIC_COMMIT: 86458a0bd369d63ba4c2ef812cacbb6c9080c065
 
 jobs:
-  build:
+  native:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -159,6 +164,58 @@ jobs:
       - name: Pack the launcher inputs
         run: tools/make_launcher_bundle.sh
 
+      - name: Keep the packed launcher inputs for the APK jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: launcher-bundle
+          path: build/launcher
+          retention-days: 1
+          if-no-files-found: error
+          include-hidden-files: true
+
+      - name: Upload libzbridge.so with symbols
+        if: ${{ inputs.keep_symbols }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: libzbridge-symbols-${{ github.run_number }}
+          path: build/android-arm64/core/libzbridge.so
+          retention-days: 14
+
+  apk:
+    needs: native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: fast
+            diagnostics: "false"
+          - variant: debug
+            diagnostics: "true"
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK pieces
+        run: |
+          set -eu
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;34.0.0"
+
+      - name: Fetch the packed launcher inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: launcher-bundle
+          path: build/launcher
+
       - name: Prepare the release key (optional)
         id: key
         env:
@@ -181,41 +238,34 @@ jobs:
             echo "Release key found: building a signed release APK."
           else
             echo "signed=false" >> "$GITHUB_OUTPUT"
-            echo "No release key: building a debug APK."
+            echo "No release key: building a debug-signed APK."
           fi
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build the launcher APK
+      - name: Build the ${{ matrix.variant }} APK
         working-directory: android/launcher
         run: |
           set -eu
           chmod +x ./gradlew
           if [ "${{ steps.key.outputs.signed }}" = "true" ]; then
-            ./gradlew --no-daemon assembleRelease
+            ./gradlew --no-daemon assembleRelease -PzbDiagnostics=${{ matrix.diagnostics }}
           else
-            ./gradlew --no-daemon assembleDebug
+            ./gradlew --no-daemon assembleDebug -PzbDiagnostics=${{ matrix.diagnostics }}
           fi
 
       - name: Collect the APK
         run: |
           set -eu
           mkdir -p out
-          cp android/launcher/app/build/outputs/apk/*/*.apk out/
+          apk="$(ls android/launcher/app/build/outputs/apk/*/*.apk | head -1)"
+          cp "$apk" "out/ZettaBridge-${{ matrix.variant }}.apk"
           ls -l out
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4
         with:
-          name: ZettaBridge-launcher-${{ github.run_number }}
-          path: out/*.apk
+          name: ZettaBridge-${{ matrix.variant }}-${{ github.run_number }}
+          path: out/ZettaBridge-${{ matrix.variant }}.apk
           retention-days: 30
-
-      - name: Upload libzbridge.so with symbols
-        if: ${{ inputs.keep_symbols }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: libzbridge-symbols-${{ github.run_number }}
-          path: build/android-arm64/core/libzbridge.so
-          retention-days: 14
