@@ -29,6 +29,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <climits>
 #include <csignal>
@@ -720,11 +721,48 @@ std::int32_t sys_futex(Ctx& c, bool time64) {
     }
 }
 
+// The limits the guest sees. A phone's own limits can be odd (an address-space cap, a huge or a tiny
+// stack limit) and old runtimes size their thread stacks and heaps from them (Boehm's garbage
+// collector reads the stack limit to find the stack of the main thread). With the option
+// "normalize_rlimits" (on by default) the guest always gets the values of an ordinary phone:
+// 8 MiB of stack, no cap on data or address space. Every other limit is passed through.
+void normalize_rlimit(int resource, std::uint64_t& cur, std::uint64_t& max) {
+    static const bool enabled = option_enabled("normalize_rlimits", true);
+    if (!enabled) return;
+    constexpr std::uint64_t kInfinity = ~0ull;
+    switch (resource) {
+    case 3:  // RLIMIT_STACK
+        cur = 8ull << 20;
+        max = kInfinity;
+        break;
+    case 2:  // RLIMIT_DATA
+    case 9:  // RLIMIT_AS
+        cur = max = kInfinity;
+        break;
+    default:
+        break;
+    }
+}
+
+void note_rlimit(int resource, std::uint64_t host_cur, std::uint64_t host_max, std::uint64_t cur, std::uint64_t max) {
+    static std::atomic<unsigned> noted{0};
+    const unsigned n = noted.fetch_add(1);
+    if (n >= 8) return;
+    char text[160];
+    std::snprintf(text, sizeof text, "resource %d: phone %llx/%llx, game sees %llx/%llx", resource,
+                  static_cast<unsigned long long>(host_cur), static_cast<unsigned long long>(host_max),
+                  static_cast<unsigned long long>(cur), static_cast<unsigned long long>(max));
+    runtime_report().note_jni_detail("rlimit-" + std::to_string(n + 1), text, true);
+}
+
 std::int32_t sys_ugetrlimit(Ctx& c) {
     rlimit rl;
     if (::getrlimit(static_cast<int>(c.a[0]), &rl) != 0) return -errno;
-    auto clamp = [](rlim_t v) -> std::uint32_t { return v > 0xFFFFFFFFu ? 0xFFFFFFFFu : static_cast<std::uint32_t>(v); };
-    return write_guest(c.mem, c.a[1], g::rlimit32{clamp(rl.rlim_cur), clamp(rl.rlim_max)}) ? 0 : -EFAULT;
+    std::uint64_t cur = rl.rlim_cur, max = rl.rlim_max;
+    normalize_rlimit(static_cast<int>(c.a[0]), cur, max);
+    note_rlimit(static_cast<int>(c.a[0]), rl.rlim_cur, rl.rlim_max, cur, max);
+    auto clamp = [](std::uint64_t v) -> std::uint32_t { return v > 0xFFFFFFFFu ? 0xFFFFFFFFu : static_cast<std::uint32_t>(v); };
+    return write_guest(c.mem, c.a[1], g::rlimit32{clamp(cur), clamp(max)}) ? 0 : -EFAULT;
 }
 
 std::int32_t sys_prlimit64(Ctx& c) {
@@ -732,7 +770,18 @@ std::int32_t sys_prlimit64(Ctx& c) {
     std::uint8_t* old_limit = nullptr;
     if (c.a[2] != 0 && !(new_limit = c.mem.host_ptr(c.a[2], 16, kPageRead))) return -EFAULT;
     if (c.a[3] != 0 && !(old_limit = c.mem.host_ptr(c.a[3], 16, kPageWrite))) return -EFAULT;
-    return result_of(::syscall(SYS_prlimit64, static_cast<pid_t>(c.a[0]), static_cast<int>(c.a[1]), new_limit, old_limit));
+    const std::int32_t result =
+        result_of(::syscall(SYS_prlimit64, static_cast<pid_t>(c.a[0]), static_cast<int>(c.a[1]), new_limit, old_limit));
+    // A read of this process's own limits gets the ordinary-phone values (see normalize_rlimit above).
+    if (result == 0 && old_limit != nullptr && new_limit == nullptr && (c.a[0] == 0 || static_cast<pid_t>(c.a[0]) == ::getpid())) {
+        std::uint64_t pair[2];
+        std::memcpy(pair, old_limit, sizeof pair);
+        const std::uint64_t host_cur = pair[0], host_max = pair[1];
+        normalize_rlimit(static_cast<int>(c.a[1]), pair[0], pair[1]);
+        note_rlimit(static_cast<int>(c.a[1]), host_cur, host_max, pair[0], pair[1]);
+        std::memcpy(old_limit, pair, sizeof pair);
+    }
+    return result;
 }
 
 std::int32_t sys_llseek(Ctx& c) {

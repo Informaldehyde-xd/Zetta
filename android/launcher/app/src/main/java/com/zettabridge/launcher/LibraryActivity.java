@@ -61,6 +61,12 @@ public class LibraryActivity extends Activity {
         root.addView(importButton, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        Button optionsButton = new Button(this);
+        optionsButton.setText("Compatibility options");
+        optionsButton.setOnClickListener(v -> RuntimeOptions.show(this));
+        root.addView(optionsButton, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
         Button checkButton = new Button(this);
         checkButton.setText("Compatibility check");
         checkButton.setOnClickListener(v -> showCompatCheck());
