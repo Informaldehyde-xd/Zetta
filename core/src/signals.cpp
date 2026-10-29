@@ -13,6 +13,7 @@
 #include <cstring>
 #include <string>
 
+#include "guest_log.h"
 #include "zb/external_dir.h"
 #include "zb/host_jni.h"
 #include "zb/log.h"
@@ -189,8 +190,11 @@ bool Process::dispatch_pending_signals(GuestThread& thread) {
                 std::snprintf(line, sizeof line, "r0=%08x r1=%08x r2=%08x r3=%08x r4=%08x r5=%08x r6=%08x r7=%08x sp=%08x\n",
                               r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[13]);
                 text += line;
+                // What the game said just before it ended itself. Mono and its garbage collector print the
+                // reason for an abort (an assertion, "out of memory", a failed signal) before calling it.
+                text += "last lines the game wrote to the log or to stderr:\n" + guest_log_recent();
                 int shown = 0;
-                for (std::uint32_t i = 0; i < 1024 && shown < 40; ++i) {
+                for (std::uint32_t i = 0; i < 1024 && shown < 24; ++i) {
                     const std::uint8_t* bytes = mem_.host_ptr(r[13] + 4 * i, 4, kPageRead);
                     if (bytes == nullptr) break;
                     std::uint32_t word;

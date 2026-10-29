@@ -36,6 +36,7 @@
 #include "zb/log.h"
 #include "zb/host_egl.h"
 #include "zb/host_jni.h"
+#include "guest_symbols.h"
 #include "profile_extra.h"
 #include "zb/diagnostics.h"
 #include "zb/external_dir.h"
@@ -303,9 +304,12 @@ std::string Process::describe_address(std::uint32_t addr) const {
     for (const auto& m : file_mappings_) {
         if (addr >= m.start && addr - m.start < m.length) {
             char where[64];
+            const std::uint64_t position = m.offset + (addr - m.start);
             std::snprintf(where, sizeof where, " %s 0x%llx", m.offset_is_vaddr ? "vaddr" : "offset",
-                          static_cast<unsigned long long>(m.offset + (addr - m.start)));
-            return m.path + where;
+                          static_cast<unsigned long long>(position));
+            // The function name, when the library has a symbol table (Mono exports its API names).
+            const std::string symbol = guest_symbol_for(m.path, position, m.offset_is_vaddr);
+            return m.path + where + (symbol.empty() ? std::string() : " (" + symbol + ")");
         }
     }
     return "?";

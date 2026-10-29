@@ -174,7 +174,7 @@ final class Diagnostics {
             if (!file.isFile() || file.length() == 0) continue;
             try {
                 String text = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
-                final int limit = name.equals("zb-errors.txt") ? 6000 : 4000;
+                final int limit = name.equals("zb-errors.txt") ? 6000 : name.equals("zb-guestabort.txt") ? 9000 : 4000;
                 // Errors are appended, so the newest are at the end; the dumps are rewritten, so the start is the news.
                 String part = name.equals("zb-errors.txt") && text.length() > limit
                         ? "...\n" + text.substring(text.length() - limit)

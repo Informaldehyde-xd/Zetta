@@ -1,4 +1,5 @@
 #include "zb/options.h"
+#include "guest_log.h"
 #include "profile_extra.h"
 #include "zb/diagnostics.h"
 #include "zb/syscalls.h"
@@ -222,6 +223,7 @@ std::int32_t sys_read_write(Ctx& c, bool is_write) {
     std::uint8_t* buf = c.mem.host_ptr(c.a[1], len, is_write ? kPageRead : kPageWrite);
     if (len != 0 && buf == nullptr) return -EFAULT;
     const int fd = static_cast<int>(c.a[0]);
+    if (is_write && len != 0) guest_log_note_write(fd, buf, len);
     return result_of(is_write ? ::write(fd, buf, len) : ::read(fd, buf, len));
 }
 
@@ -246,6 +248,7 @@ std::int32_t sys_readv_writev(Ctx& c, bool is_write) {
         iov[i] = {base, v.iov_len};
     }
     const int fd = static_cast<int>(c.a[0]);
+    if (is_write) guest_log_note_write(fd, iov.data(), static_cast<int>(count));
     return result_of(is_write ? ::writev(fd, iov.data(), static_cast<int>(count)) : ::readv(fd, iov.data(), static_cast<int>(count)));
 }
 
@@ -1563,6 +1566,10 @@ bool handle_syscall(Process& proc, GuestThread& thread) {
         std::uint8_t* addr = c.mem.host_ptr(c.a[1], c.a[2], kPageRead);
         res = (c.a[2] != 0 && !addr) ? -EFAULT
                                      : result_of(::syscall(SYS_connect, static_cast<int>(c.a[0]), addr, c.a[2]));
+        // The Android log goes through this socket: keep what the game writes to it for the crash report.
+        if (res == 0 && addr != nullptr && c.a[2] > 18 && std::strncmp(reinterpret_cast<const char*>(addr) + 2, "/dev/socket/logd", 16) == 0) {
+            guest_log_remember_logd_fd(static_cast<int>(c.a[0]));
+        }
         break;
     }
     case NR_rt_tgsigqueueinfo: {
@@ -1833,7 +1840,9 @@ bool handle_syscall(Process& proc, GuestThread& thread) {
     // A phone that refuses something an ordinary phone allows (a permission, a blocked call, a missing
     // file) is the usual reason a game that runs on one phone aborts on another. Failed calls are
     // counted by kind and the first paths or arguments go to the run report, in every build.
-    if (res < 0 && res != -EINTR && res != -EAGAIN && res != -ETIMEDOUT) {
+    // Linux reports an error as a value from -4095 to -1. Anything lower is a result that only looks
+    // negative as a signed number, such as the address mmap2 returns above 2 GiB.
+    if (res < 0 && res >= -4095 && res != -EINTR && res != -EAGAIN && res != -ETIMEDOUT) {
         const char* subject = nullptr;
         char numbers[72];
         switch (nr) {

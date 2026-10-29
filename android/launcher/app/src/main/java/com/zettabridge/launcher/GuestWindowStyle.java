@@ -42,6 +42,11 @@ final class GuestWindowStyle {
     static void afterCreate(Activity activity) {
         Window window = activity.getWindow();
         if (window == null) return;
+        // A game that is loading takes no touches, so the screen timeout would switch the screen off
+        // and pause the game in the middle of the load. The game's pause then waits for an engine
+        // thread that is busy loading, the main thread stops answering, and Android kills the
+        // process ("bg anr"). Games always want the screen on.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         try {
             AspectLetterbox.apply(activity);
         } catch (RuntimeException e) {
