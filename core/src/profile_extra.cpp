@@ -13,6 +13,7 @@
 
 #include "zb/diagnostics.h"
 #include "zb/external_dir.h"
+#include "zb/runtime_report.h"
 
 namespace zb {
 
@@ -115,7 +116,70 @@ std::string memory_text() {
     return out;
 }
 
+const char* errno_name(int e) {
+    switch (e) {
+    case 1: return "EPERM";        case 2: return "ENOENT";      case 3: return "ESRCH";       case 4: return "EINTR";
+    case 5: return "EIO";          case 9: return "EBADF";       case 10: return "ECHILD";     case 11: return "EAGAIN";
+    case 12: return "ENOMEM";      case 13: return "EACCES";     case 14: return "EFAULT";     case 16: return "EBUSY";
+    case 17: return "EEXIST";      case 19: return "ENODEV";     case 20: return "ENOTDIR";    case 21: return "EISDIR";
+    case 22: return "EINVAL";      case 24: return "EMFILE";     case 25: return "ENOTTY";     case 28: return "ENOSPC";
+    case 29: return "ESPIPE";      case 30: return "EROFS";      case 32: return "EPIPE";      case 34: return "ERANGE";
+    case 38: return "ENOSYS";      case 110: return "ETIMEDOUT"; case 111: return "ECONNREFUSED";
+    default: return nullptr;
+    }
+}
+
+struct Failure {
+    std::uint32_t nr = 0;
+    int err = 0;
+    std::uint64_t count = 0;
+    std::string name;
+    std::vector<std::string> examples;  // the first few subjects
+};
+std::mutex g_failure_mutex;
+std::vector<Failure> g_failures;
+
 }  // namespace
+
+void account_syscall_failure(std::uint32_t nr, const char* name, int err, const char* subject) {
+    std::lock_guard<std::mutex> lock(g_failure_mutex);
+    std::size_t index = g_failures.size();
+    for (std::size_t i = 0; i < g_failures.size(); ++i) {
+        if (g_failures[i].nr == nr && g_failures[i].err == err) {
+            index = i;
+            break;
+        }
+    }
+    if (index == g_failures.size()) {
+        if (g_failures.size() >= 24) return;
+        Failure f;
+        f.nr = nr;
+        f.err = err;
+        f.name = name != nullptr ? name : "syscall";
+        g_failures.push_back(std::move(f));
+    }
+    Failure& f = g_failures[index];
+    ++f.count;
+    bool added = false;
+    if (subject != nullptr && *subject != '\0' && f.examples.size() < 3) {
+        std::string text(subject, strnlen(subject, 110));
+        bool known = false;
+        for (const std::string& e : f.examples) known |= (e == text);
+        if (!known) {
+            f.examples.push_back(std::move(text));
+            added = true;
+        }
+    }
+    // Update the report line for the first occurrences, for every new example and at 2, 4, 8, ... 4096.
+    const bool power_of_two = (f.count & (f.count - 1)) == 0 && f.count <= 4096;
+    if (!added && !power_of_two) return;
+    std::string line = f.name + " -> ";
+    if (const char* e = errno_name(err)) line += e;
+    else line += "errno " + std::to_string(err);
+    line += " x" + std::to_string(f.count);
+    for (std::size_t i = 0; i < f.examples.size(); ++i) line += (i == 0 ? "  e.g. " : " | ") + f.examples[i];
+    runtime_report().note_jni_detail("syscall-fail-" + std::to_string(index + 1), line, true);
+}
 
 void account_syscall(std::uint32_t nr, std::uint64_t ticks) {
     const std::size_t slot = nr < kSlots ? nr : kSlots - 1;

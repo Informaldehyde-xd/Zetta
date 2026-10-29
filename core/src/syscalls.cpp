@@ -1830,6 +1830,28 @@ bool handle_syscall(Process& proc, GuestThread& thread) {
     if (trace_enabled()) {
         log("%s(0x%x, 0x%x, 0x%x, 0x%x) = %d", syscall_name(nr), c.a[0], c.a[1], c.a[2], c.a[3], res);
     }
+    // A phone that refuses something an ordinary phone allows (a permission, a blocked call, a missing
+    // file) is the usual reason a game that runs on one phone aborts on another. Failed calls are
+    // counted by kind and the first paths or arguments go to the run report, in every build.
+    if (res < 0 && res != -EINTR && res != -EAGAIN && res != -ETIMEDOUT) {
+        const char* subject = nullptr;
+        char numbers[72];
+        switch (nr) {
+        case NR_open: case NR_stat64: case NR_lstat64: case NR_access: case NR_readlink:
+            subject = guest_cstr(c.mem, c.a[0]);
+            break;
+        case NR_openat: case NR_fstatat64: case NR_faccessat:
+            subject = guest_cstr(c.mem, c.a[1]);
+            break;
+        case NR_mmap2: case NR_mprotect: case NR_munmap: case NR_mremap: case NR_madvise:
+            std::snprintf(numbers, sizeof numbers, "a0=%x a1=%x a2=%x", c.a[0], c.a[1], c.a[2]);
+            subject = numbers;
+            break;
+        default:
+            break;
+        }
+        account_syscall_failure(nr, syscall_name(nr), -res, subject);
+    }
     if (c.stop) return false;
     // A wait that was interrupted although no guest signal can be delivered (the host interrupt was
     // spurious: a signal the guest blocks, or a nudge that came after the signal was taken): the
