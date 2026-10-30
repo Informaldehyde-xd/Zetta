@@ -233,12 +233,17 @@ void RuntimeReport::note_signal_restart(std::uint32_t nr, const char* name,
 }
 
 void RuntimeReport::note_gl_call(const char* function, std::uint64_t host_tid) {
+    note_gl_calls(function, host_tid, 1);
+}
+
+void RuntimeReport::note_gl_calls(const char* function, std::uint64_t host_tid, std::uint64_t count) {
     bool structural = false;
     std::shared_ptr<Observer> observer;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        ++gl_call_total_;
-        if (gl_call_total_ == 1) {
+        const bool first = gl_call_total_ == 0;
+        gl_call_total_ += count;
+        if (first) {
             gl_first_call_function_ = function != nullptr ? function : "?";
             gl_first_call_tid_ = host_tid;
             structural = true;

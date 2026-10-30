@@ -89,8 +89,17 @@ bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
         log("GLES trace: %s(0x%x, 0x%x, 0x%x, 0x%x)", name, thread.regs()[0], thread.regs()[1],
             thread.regs()[2], thread.regs()[3]);
     }
-    const std::uint64_t host_tid = static_cast<std::uint64_t>(::syscall(SYS_gettid));
-    runtime_report().note_gl_call(name, host_tid);
+    // Per GL call (60,000 a second in a busy scene) a system call for the thread id and a locked update of the
+    // report are too much work for a counter: the id is read once per thread, and the calls are counted in
+    // batches. The first call is noted at once; the total in the report can lag by under 256 calls.
+    thread_local const std::uint64_t host_tid = static_cast<std::uint64_t>(::syscall(SYS_gettid));
+    if (!gl_first_call_noted_) {
+        gl_first_call_noted_ = true;
+        runtime_report().note_gl_calls(name, host_tid, 1);
+    } else if (++gl_calls_pending_ >= 256) {
+        runtime_report().note_gl_calls(name, host_tid, gl_calls_pending_);
+        gl_calls_pending_ = 0;
+    }
     const std::uint64_t egl_generation = runtime_report().egl_current_generation();
     if (egl_generation != gl_thread_sampled_generation_) {
         gl_thread_sampled_generation_ = egl_generation;

@@ -83,6 +83,8 @@ public:
     // One GL host call, always counted; the first call also records its function name and the
     // calling host thread id (gettid()).
     void note_gl_call(const char* function, std::uint64_t host_tid);
+    // The same for `count` calls at once (the host counts GL calls in batches: one lock per call is too much at 60,000 a second).
+    void note_gl_calls(const char* function, std::uint64_t host_tid, std::uint64_t count);
     // Whether eglGetCurrentContext() != EGL_NO_CONTEXT on the thread of the first GL call.
     // Recorded once; later calls are ignored.
     void note_gl_egl_context(bool current);

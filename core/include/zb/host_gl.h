@@ -142,6 +142,8 @@ private:
     GlBackend& backend_;
     GuestAllocator allocator_;
     EglContextProbe egl_context_probe_;
+    bool gl_first_call_noted_ = false;
+    std::uint32_t gl_calls_pending_ = 0;
     bool egl_context_checked_ = false;
     // The last runtime_report().egl_current_generation() this HostGl sampled a gl* call's thread
     // for. Compared with one relaxed atomic load per call; a mismatch means a new eglMakeCurrent
