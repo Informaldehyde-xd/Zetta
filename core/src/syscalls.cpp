@@ -1538,8 +1538,26 @@ bool handle_syscall(Process& proc, GuestThread& thread) {
     case NR_futex_time64: res = sys_futex(c, true); break;
     case NR_sched_yield: res = result_of(::sched_yield()); break;
     case NR_sched_getaffinity: {
-        std::uint8_t* mask = c.mem.host_ptr(c.a[2], c.a[1], kPageWrite);
-        res = !mask ? -EFAULT : result_of(::syscall(SYS_sched_getaffinity, static_cast<pid_t>(c.a[0]), c.a[1], mask));
+        // A 64-bit kernel only accepts a mask size that is a multiple of 8 bytes. A 32-bit program often
+        // asks with 4 (one 32-bit word, as Mono and Boehm do) and gets EINVAL for no reason. Ask the kernel
+        // with a roomy buffer and hand the guest as much of the answer as it has room for.
+        const std::uint32_t guest_len = c.a[1];
+        std::uint8_t* mask = guest_len == 0 ? nullptr : c.mem.host_ptr(c.a[2], guest_len, kPageWrite);
+        if (guest_len == 0) {
+            res = -EINVAL;
+        } else if (!mask) {
+            res = -EFAULT;
+        } else {
+            std::uint8_t local[128] = {};
+            const long got = ::syscall(SYS_sched_getaffinity, static_cast<pid_t>(c.a[0]), sizeof local, local);
+            if (got < 0) {
+                res = -errno;
+            } else {
+                const std::uint32_t copy = guest_len < static_cast<std::uint32_t>(got) ? guest_len : static_cast<std::uint32_t>(got);
+                std::memcpy(mask, local, copy);
+                res = static_cast<std::int32_t>(copy);
+            }
+        }
         break;
     }
     case NR_getrandom: {
