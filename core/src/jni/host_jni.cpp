@@ -3,6 +3,7 @@
 #include "host_jni_internal.h"
 
 #include <atomic>
+#include <mutex>
 #include <string>
 
 #include <array>
@@ -374,6 +375,33 @@ void note_recent(std::uint32_t index) {
     g_recent[slot % kRecentJniCalls].store(index, std::memory_order_relaxed);
 }
 
+constexpr std::size_t kRecentLabels = 24;
+std::mutex g_label_mutex;
+std::string g_labels[kRecentLabels];
+std::uint64_t g_label_next = 0;
+
+}  // namespace
+
+void jni_note_label(const char* what, const std::string& name, const std::string& signature, bool failed) {
+    std::string label = std::string(what) + "(" + name.substr(0, 60);
+    if (!signature.empty()) label += " " + signature.substr(0, 40);
+    label += failed ? ") FAILED" : ")";
+    std::lock_guard<std::mutex> lock(g_label_mutex);
+    g_labels[g_label_next++ % kRecentLabels] = std::move(label);
+}
+
+namespace {
+std::string recent_labels() {
+    std::lock_guard<std::mutex> lock(g_label_mutex);
+    if (g_label_next == 0) return std::string();
+    const std::uint64_t first = g_label_next > kRecentLabels ? g_label_next - kRecentLabels : 0;
+    std::string out;
+    for (std::uint64_t i = first; i < g_label_next; ++i) {
+        if (!out.empty()) out += " ";
+        out += g_labels[i % kRecentLabels];
+    }
+    return out;
+}
 }  // namespace
 
 std::string jni_recent_calls() {
@@ -386,6 +414,8 @@ std::string jni_recent_calls() {
         if (!out.empty()) out += " ";
         out += jni_host_call_name(index);
     }
+    const std::string labels = recent_labels();
+    if (!labels.empty()) out += "\n  looked up lately: " + labels;
     return out;
 }
 

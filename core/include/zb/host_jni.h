@@ -25,6 +25,9 @@ struct NativeCallCounter;  // core/include/zb/runtime_report.h
 // the LibraryRuntime it is process-lifetime and must outlive every guest thread.
 // The last JNI host calls this process served, newest last, for a crash report.
 std::string jni_recent_calls();
+// Which classes, fields and methods the guest looked up most recently (the names are what tells a crash
+// report what the game was doing); "FAILED" marks a lookup that found nothing.
+void jni_note_label(const char* what, const std::string& name, const std::string& signature, bool failed);
 
 class HostJni {
 public:

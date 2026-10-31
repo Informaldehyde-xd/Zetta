@@ -223,6 +223,27 @@ bool Process::dispatch_pending_signals(GuestThread& thread) {
 }
 
 bool Process::deliver_fault(GuestThread& thread, const Stop& stop) {
+    // The first few faults go to the run report, in every build. A game that dies from a fault it cannot
+    // handle (Mono prints "Stacktrace:" and aborts) names its cause here: where it happened and at which
+    // address. Without the game's "Precise faults (slow)" option the pc can be the start of a block of code
+    // and the registers are not those of the faulting instruction.
+    {
+        static std::atomic<unsigned> seen{0};
+        const unsigned n = seen.fetch_add(1);
+        if (n < 6) {
+            const auto& r = thread.regs();
+            char head[260];
+            if (stop.kind == StopKind::MemoryFault) {
+                std::snprintf(head, sizeof head, "SIGSEGV %s of 0x%08x, pc 0x%08x, lr 0x%08x, sp 0x%08x, r0-r3 %08x %08x %08x %08x",
+                              stop.fault_write ? "write" : "read", stop.fault_addr, stop.pc, r[14], r[13], r[0], r[1], r[2], r[3]);
+            } else {
+                std::snprintf(head, sizeof head, "%s at pc 0x%08x, lr 0x%08x",
+                              stop.exception == Dynarmic::A32::Exception::Breakpoint ? "breakpoint" : "illegal instruction", stop.pc, r[14]);
+            }
+            runtime_report().note_jni_detail("guest-fault-" + std::to_string(n + 1),
+                                             std::string(head) + " | pc in " + describe_address(stop.pc) + " | lr in " + describe_address(r[14]), true);
+        }
+    }
     g::siginfo32 info{};
     if (stop.kind == StopKind::MemoryFault) {
         info.si_signo = SIGSEGV;

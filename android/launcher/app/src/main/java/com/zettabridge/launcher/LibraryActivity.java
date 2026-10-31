@@ -416,6 +416,10 @@ public class LibraryActivity extends Activity {
                 .setTitle(copied ? "Compatibility check (copied)" : "Compatibility check")
                 .setView(scroll)
                 .setPositiveButton("Close", null)
+                .setNeutralButton("Save .txt", (dialog, which) -> {
+                    String where = ReportExport.save(this, "zettabridge-compat", text);
+                    Toast.makeText(this, where != null ? "Saved: " + where : "Could not save the file.", Toast.LENGTH_LONG).show();
+                })
                 .show();
     }
 
@@ -441,10 +445,18 @@ public class LibraryActivity extends Activity {
         view.setPadding(pad, pad, pad, pad);
         ScrollView scroll = new ScrollView(this);
         scroll.addView(view);
+        // The text on the screen is shortened to fit a message; "Save .txt" writes everything to Downloads.
+        final String fullText = (report != null ? report : "(no runtime report was written)\n")
+                + (file != null ? "\nfile: " + file.getAbsolutePath() + "\n" : "") + "\n" + Diagnostics.readEvidence(this, true);
         new AlertDialog.Builder(this)
                 .setTitle(copied ? "Last run report (copied)" : "Last run report")
                 .setView(scroll)
                 .setPositiveButton("Close", null)
+                .setNeutralButton("Save .txt", (dialog, which) -> {
+                    String where = ReportExport.save(this, "zettabridge-report", fullText);
+                    Toast.makeText(this, where != null ? "Saved: " + where + ". Upload this file." : "Could not save the file.",
+                            Toast.LENGTH_LONG).show();
+                })
                 .show();
     }
 

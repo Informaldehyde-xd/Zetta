@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.text.SimpleDateFormat;
+import java.util.Map;
 import java.util.Date;
 import java.util.Locale;
 
@@ -76,6 +77,7 @@ final class Diagnostics {
             return;
         }
         externalDir = file.getParentFile();
+        keepOnlyThisRun(externalDir);
         ZBridge.setDiagnostics(toolsEnabled(context));
         try {
             if (!ZBridge.setReportFile(file.getAbsolutePath())) {
@@ -149,16 +151,45 @@ final class Diagnostics {
         }
     }
 
-    private static final String[] EVIDENCE_FILES = {"zb-errors.txt", "zb-abort.txt", "zb-guestabort.txt", "zb-freeze.txt",
-            "zb-pause-stall.txt", "zb-profile-busiest.txt", "zb-pcprofile-busiest.txt",
-            "zb-syscalls-busiest.txt", "zb-memory.txt"};
+    private static final String[] PER_RUN_FILES = {"zb-guestabort.txt", "zb-abort.txt", "zb-freeze.txt", "zb-pause-stall.txt",
+            "zb-syscalls-busiest.txt", "zb-profile-busiest.txt", "zb-pcprofile-busiest.txt"};
+
+    /**
+     * A report must describe the run it was made after. The dumps of the run before (a crash, a freeze)
+     * are kept for one run as "<name>.prev" and removed from the live names, so an old abort cannot be
+     * mistaken for the one that just happened. zb-dump-now is a request, never a result.
+     */
+    private static void keepOnlyThisRun(File dir) {
+        for (String name : PER_RUN_FILES) {
+            File current = new File(dir, name);
+            if (current.isFile()) {
+                File previous = new File(dir, name + ".prev");
+                //noinspection ResultOfMethodCallIgnored
+                previous.delete();
+                //noinspection ResultOfMethodCallIgnored
+                current.renameTo(previous);
+            }
+        }
+        //noinspection ResultOfMethodCallIgnored
+        new File(dir, "zb-dump-now").delete();
+    }
+
+    // Most useful first: if anything has to be cut, it is the least useful.
+    private static final String[] EVIDENCE_FILES = {"zb-guestabort.txt", "zb-abort.txt", "zb-freeze.txt", "zb-pause-stall.txt",
+            "zb-errors.txt", "zb-syscalls-busiest.txt", "zb-memory.txt", "zb-profile-busiest.txt", "zb-pcprofile-busiest.txt"};
+
+    /** The screen version: each file is cut to a size that still fits in a message. */
+    static String readEvidence(Context context) {
+        return readEvidence(context, false);
+    }
 
     /**
      * Everything a run leaves behind besides the counters, as one text for the "Last run report"
-     * screen: the phone, the Java errors, the abort and freeze dumps. A phone without root cannot
-     * open Android/data, so this screen and the clipboard are the way to get these files out.
+     * screen: the phone, the abort and freeze dumps, the Java errors. A phone without root cannot
+     * open Android/data, so this screen, the clipboard and "Save .txt" are the way to get these files
+     * out. With full = true nothing is cut (that is what "Save .txt" writes).
      */
-    static String readEvidence(Context context) {
+    static String readEvidence(Context context, boolean full) {
         StringBuilder out = new StringBuilder();
         out.append("=== device ===\n");
         out.append("model: ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL).append('\n');
@@ -171,18 +202,69 @@ final class Diagnostics {
         if (dir == null) return out.toString();
         for (String name : EVIDENCE_FILES) {
             File file = new File(dir, name);
-            if (!file.isFile() || file.length() == 0) continue;
+            String shownName = name;
+            if (!file.isFile() || file.length() == 0) {
+                // Nothing from this run: show the one the run before left, marked as old.
+                file = new File(dir, name + ".prev");
+                if (!file.isFile() || file.length() == 0) continue;
+                shownName = name + " (FROM THE PREVIOUS RUN, not this one)";
+            }
             try {
                 String text = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
-                final int limit = name.equals("zb-errors.txt") ? 6000 : name.equals("zb-guestabort.txt") ? 9000 : 4000;
-                // Errors are appended, so the newest are at the end; the dumps are rewritten, so the start is the news.
-                String part = name.equals("zb-errors.txt") && text.length() > limit
-                        ? "...\n" + text.substring(text.length() - limit)
-                        : (text.length() > limit ? text.substring(0, limit) + "\n..." : text);
-                out.append("\n=== ").append(name).append(" ===\n").append(part).append('\n');
+                if (name.equals("zb-errors.txt")) text = collapseRepeatedErrors(text);
+                final int limit = full ? 400000 : name.equals("zb-guestabort.txt") ? 16000 : name.equals("zb-errors.txt") ? 5000 : 4000;
+                String part;
+                if (text.length() <= limit) {
+                    part = text;
+                } else if (name.equals("zb-errors.txt")) {
+                    // Errors are appended: the newest are at the end.
+                    part = "... [" + (text.length() - limit) + " older characters cut; Save .txt keeps everything]\n" + text.substring(text.length() - limit);
+                } else {
+                    part = text.substring(0, limit) + "\n... [" + (text.length() - limit) + " more characters cut; Save .txt keeps everything]";
+                }
+                out.append("\n=== ").append(shownName).append(" ===\n").append(part).append('\n');
             } catch (IOException | RuntimeException e) {
                 out.append("\n=== ").append(name).append(" (cannot read: ").append(e).append(") ===\n");
             }
+        }
+        return out.toString();
+    }
+
+    /**
+     * zb-errors.txt gets the same exception again on every run (the Google Play services one, for
+     * example). Entries that differ only by their time stamp are shown once, with how often they came.
+     */
+    static String collapseRepeatedErrors(String text) {
+        String[] entries = text.split("\n\n+");
+        java.util.LinkedHashMap<String, int[]> counts = new java.util.LinkedHashMap<>();
+        java.util.LinkedHashMap<String, String> firstSeen = new java.util.LinkedHashMap<>();
+        java.util.LinkedHashMap<String, String> lastSeen = new java.util.LinkedHashMap<>();
+        for (String entry : entries) {
+            if (entry.trim().isEmpty()) continue;
+            int newline = entry.indexOf('\n');
+            String head = newline < 0 ? entry : entry.substring(0, newline);
+            String body = newline < 0 ? "" : entry.substring(newline);
+            // "2026-10-29 23:06:58 swallowed ..." -> key without the time stamp
+            String key = (head.length() > 20 && head.charAt(4) == '-' ? head.substring(20) : head) + body;
+            String stamp = head.length() > 19 && head.charAt(4) == '-' ? head.substring(0, 19) : "";
+            int[] count = counts.get(key);
+            if (count == null) {
+                counts.put(key, new int[] {1});
+                firstSeen.put(key, entry);
+            } else {
+                count[0]++;
+            }
+            lastSeen.put(key, stamp);
+        }
+        StringBuilder out = new StringBuilder();
+        for (Map.Entry<String, int[]> e : counts.entrySet()) {
+            String entry = firstSeen.get(e.getKey());
+            int newline = entry.indexOf('\n');
+            if (e.getValue()[0] > 1) {
+                String head = newline < 0 ? entry : entry.substring(0, newline);
+                entry = head + "  [x" + e.getValue()[0] + ", last " + lastSeen.get(e.getKey()) + "]" + (newline < 0 ? "" : entry.substring(newline));
+            }
+            out.append(entry).append("\n\n");
         }
         return out.toString();
     }

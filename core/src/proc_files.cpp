@@ -3,6 +3,7 @@
 // /proc/self/stat (startstack) and /proc/self/maps, and apps parse /proc/cpuinfo for features.
 #include <fcntl.h>
 #include <sched.h>
+#include <ctime>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -55,6 +56,33 @@ std::string cpuinfo_text() {
     return text;
 }
 
+// /proc/stat, for phones that do not let an app read it (Android 8 and newer, stock builds). Boehm's
+// garbage collector counts the "cpuN" lines to learn how many processors there are, and says
+// "GC_get_nprocs() returned -1" when it cannot read the file. The numbers here are plausible time counters;
+// the line count is what matters.
+std::string stat_text() {
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    int cpus = 1;
+    if (::sched_getaffinity(0, sizeof set, &set) == 0) cpus = CPU_COUNT(&set);
+    timespec boot{};
+    ::clock_gettime(CLOCK_BOOTTIME, &boot);
+    const unsigned long long ticks = static_cast<unsigned long long>(boot.tv_sec) * 100ull;  // clock ticks per second: 100
+    const unsigned long long user = ticks / 20, nice = 0, system = ticks / 30, idle = ticks - user - system;
+    char line[200];
+    std::string text;
+    std::snprintf(line, sizeof line, "cpu  %llu %llu %llu %llu 0 0 0 0 0 0\n", user * cpus, nice, system * cpus, idle * cpus);
+    text += line;
+    for (int i = 0; i < cpus; ++i) {
+        std::snprintf(line, sizeof line, "cpu%d %llu %llu %llu %llu 0 0 0 0 0 0\n", i, user, nice, system, idle);
+        text += line;
+    }
+    std::snprintf(line, sizeof line, "intr 0\nctxt %llu\nbtime %lld\nprocesses 1000\nprocs_running 1\nprocs_blocked 0\nsoftirq 0\n",
+                  ticks * 10, static_cast<long long>(::time(nullptr)) - static_cast<long long>(boot.tv_sec));
+    text += line;
+    return text;
+}
+
 int memfd_with(const std::string& text, int flags) {
     const int fd = static_cast<int>(::syscall(SYS_memfd_create, "zbridge-proc", (flags & O_CLOEXEC) ? kMfdCloexec : 0u));
     if (fd < 0) return -errno;
@@ -84,6 +112,14 @@ bool Process::open_synthetic_file(const char* guest_path, int flags, std::int32_
         text = build_stat();
     } else if (path == "/proc/cpuinfo") {
         text = cpuinfo_text();
+    } else if (path == "/proc/stat") {
+        // Where the phone lets the app read the real file, nothing changes.
+        const int probe = ::open("/proc/stat", O_RDONLY | O_CLOEXEC);
+        if (probe >= 0) {
+            ::close(probe);
+            return false;
+        }
+        text = stat_text();
     } else {
         return false;
     }

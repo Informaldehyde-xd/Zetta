@@ -17,7 +17,9 @@ bool HostJni::Impl::serve_objects(JniCall& call) {
     case ZB_JNI_HC_FindClass: {
         const JniBackend::Env env = call.env();
         const std::string class_name = read_string(env, call.arg(0), name);
-        call.set(local(state, backend.find_class(env, class_name.c_str())));
+        const JniBackend::Ref found = backend.find_class(env, class_name.c_str());
+        jni_note_label("FindClass", class_name, std::string(), found == 0);
+        call.set(local(state, found));
         return true;
     }
     case ZB_JNI_HC_GetSuperclass:
@@ -32,6 +34,7 @@ bool HostJni::Impl::serve_objects(JniCall& call) {
         const std::string method = read_string(env, call.arg(1), name);
         const std::string signature = read_string(env, call.arg(2), name);
         const JniBackend::Id id = backend.get_method_id(env, cls, method.c_str(), signature.c_str(), call.arg(3) != 0);
+        jni_note_label("GetMethodID", method, signature, id == 0);
         if (id == 0) {
             // A lookup that fails leaves NoSuchMethodError pending in ART, and the next JNI call
             // made with it pending aborts the process. Old native code often probes for methods
@@ -53,7 +56,15 @@ bool HostJni::Impl::serve_objects(JniCall& call) {
         const JniBackend::Ref cls = ref(0);
         const std::string field = read_string(env, call.arg(1), name);
         const std::string signature = read_string(env, call.arg(2), name);
-        call.set(fields.intern(backend.get_field_id(env, cls, field.c_str(), signature.c_str(), call.arg(3) != 0)));
+        const JniBackend::Id id = backend.get_field_id(env, cls, field.c_str(), signature.c_str(), call.arg(3) != 0);
+        jni_note_label("GetFieldID", field, signature, id == 0);
+        if (id == 0) {
+            // As for a missing method: the NoSuchFieldError it leaves pending is cleared; the zero id says it all.
+            backend.exception_clear(env);
+            call.set(0);
+            return true;
+        }
+        call.set(fields.intern(id));
         return true;
     }
     case ZB_JNI_HC_GetMethodShorty: {

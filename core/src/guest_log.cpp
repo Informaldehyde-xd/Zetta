@@ -15,8 +15,8 @@ namespace {
 std::mutex g_mutex;
 std::deque<std::string> g_lines;
 std::vector<int> g_logd_fds;
-constexpr std::size_t kMaxLines = 80;
-constexpr std::size_t kMaxLine = 400;
+constexpr std::size_t kMaxLines = 60;
+constexpr std::size_t kMaxLine = 240;
 
 bool is_logd(int fd) {
     for (int known : g_logd_fds) {
