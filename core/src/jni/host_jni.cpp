@@ -425,6 +425,23 @@ JniCallScope::~JniCallScope() {
     g_in_flight[slot_].used = false;
 }
 
+namespace {
+std::atomic<std::uint64_t> g_last_call{0};
+}  // namespace
+
+void jni_note_call(std::uint64_t method_id, bool null_or_threw) {
+    if (!diagnostics_enabled()) return;
+    g_last_call.store(method_id, std::memory_order_relaxed);
+    if (!null_or_threw) return;
+    std::string name = "id " + std::to_string(method_id);
+    {
+        std::lock_guard<std::mutex> lock(g_call_mutex);
+        auto found = g_method_names.find(method_id);
+        if (found != g_method_names.end()) name = found->second;
+    }
+    jni_note_label("CallMethodA", name, std::string(), true);  // shown as "... FAILED": null result or exception
+}
+
 std::string jni_calls_in_progress() {
     std::lock_guard<std::mutex> lock(g_call_mutex);
     const auto now = std::chrono::steady_clock::now();
@@ -474,6 +491,11 @@ std::string jni_recent_calls() {
     }
     const std::string labels = recent_labels();
     if (!labels.empty()) out += "\n  looked up lately: " + labels;
+    if (const std::uint64_t last = g_last_call.load(std::memory_order_relaxed)) {
+        std::lock_guard<std::mutex> lock(g_call_mutex);
+        auto found = g_method_names.find(last);
+        out += "\n  last Java method called: " + (found != g_method_names.end() ? found->second : "id " + std::to_string(last));
+    }
     return out;
 }
 

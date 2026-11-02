@@ -127,7 +127,9 @@ bool HostJni::Impl::serve_values(JniCall& call) {
         // one still pending can abort on the very next JNI call (or the game goes on with a poisoned state).
         // The exception is cleared here; the result already tells the game the call did not work.
         static const bool clear_exceptions = option_enabled("jni_clear_exceptions", true);
+        bool threw = false;
         if (clear_exceptions && backend.exception_check(env)) {
+            threw = true;
             static std::atomic<unsigned> shown{0};
             if (shown.fetch_add(1) < 10) {
                 log("a Java exception from a JNI method call was cleared (the first 10 are printed):");
@@ -135,6 +137,7 @@ bool HostJni::Impl::serve_values(JniCall& call) {
             }
             backend.exception_clear(env);
         }
+        jni_note_call(static_cast<std::uint64_t>(id), threw || (type == 'L' && result.l == 0));
         if (type == 'L') {
             call.set(local(state, result.l));
         } else if (type != 'V') {

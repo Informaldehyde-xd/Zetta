@@ -32,6 +32,10 @@ std::string jni_recent_calls();
 // freeze) names the method it waits for; the debug build only.
 void jni_remember_method(std::uint64_t id, const std::string& name, const std::string& signature);
 std::string jni_calls_in_progress();
+// Called after every Java method call (debug build): remembers the last method called, and writes the calls
+// that returned null or threw into the list of recent lookups. A game that then uses a null string
+// (strlen of a null pointer) is named by the call that handed it the null.
+void jni_note_call(std::uint64_t method_id, bool null_or_threw);
 
 class JniCallScope {
 public:
