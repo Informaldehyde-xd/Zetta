@@ -15,4 +15,9 @@ void guest_log_note_write(int fd, const iovec* vectors, int count);
 void guest_log_note_write(int fd, const void* data, std::size_t size);
 std::string guest_log_recent();
 
+// The first guest memory faults (where, which address, which registers). Kept apart from the run report,
+// whose detail list is full long before a fault happens, and written to zb-faults.txt as they come.
+void guest_fault_note(const std::string& line);
+std::string guest_faults();
+
 }  // namespace zb

@@ -56,8 +56,18 @@ final class PauseWatchdog {
         for (Map.Entry<Thread, StackTraceElement[]> entry : Thread.getAllStackTraces().entrySet()) {
             final Thread thread = entry.getKey();
             final String name = thread.getName();
-            final boolean interesting = thread == pausing || name.contains("GL") || name.contains("Unity")
-                    || name.startsWith("Thread-") || name.contains("zb") || name.contains("FMOD");
+            boolean interesting = thread == pausing || name.contains("GL") || name.contains("Unity")
+                    || name.startsWith("Thread-") || name.contains("zb") || name.contains("FMOD") || name.contains(".launcher");
+            // Any thread that is inside the game's or the launcher's Java code: this is where a guest call
+            // into Java that never returns shows up.
+            for (StackTraceElement frame : entry.getValue()) {
+                final String owner = frame.getClassName();
+                if (owner.startsWith("com.unity3d") || owner.startsWith("com.zettabridge") || owner.startsWith("com.glu")
+                        || owner.startsWith("com.galapagos")) {
+                    interesting = true;
+                    break;
+                }
+            }
             if (!interesting) continue;
             out.append("\n\"").append(name).append("\" ").append(thread.getState()).append('\n');
             int shown = 0;

@@ -8,6 +8,8 @@
 #include <mutex>
 #include <vector>
 
+#include "zb/external_dir.h"
+
 namespace zb {
 
 namespace {
@@ -77,6 +79,32 @@ void guest_log_note_write(int fd, const iovec* vectors, int count) {
         joined.append(static_cast<const char*>(vectors[i].iov_base), vectors[i].iov_len);
     }
     guest_log_note_write(fd, joined.data(), joined.size());
+}
+
+namespace {
+std::vector<std::string> g_faults;
+constexpr std::size_t kMaxFaults = 8;
+}  // namespace
+
+void guest_fault_note(const std::string& line) {
+    std::string all;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (g_faults.size() >= kMaxFaults) return;
+        g_faults.push_back(line);
+        for (const std::string& fault : g_faults) all += fault + "\n";
+    }
+    if (std::FILE* file = std::fopen(external_file_path("zb-faults.txt").c_str(), "we")) {
+        std::fwrite(all.data(), 1, all.size(), file);
+        std::fclose(file);
+    }
+}
+
+std::string guest_faults() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    std::string out;
+    for (const std::string& fault : g_faults) out += fault + "\n";
+    return out;
 }
 
 std::string guest_log_recent() {

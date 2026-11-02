@@ -118,8 +118,11 @@ bool HostJni::Impl::serve_values(JniCall& call) {
                                 : value_from_bits(letter, bits);
             }
         }
-        const JValue result =
-            backend.call_method(env, static_cast<JniCallKind>(kind), type, obj, cls, id, values.data());
+        JValue result;
+        {
+            const JniCallScope in_flight(static_cast<std::uint64_t>(id));  // visible in the freeze dump while it runs
+            result = backend.call_method(env, static_cast<JniCallKind>(kind), type, obj, cls, id, values.data());
+        }
         // Old native code never checks for a Java exception after a call, and a modern runtime that finds
         // one still pending can abort on the very next JNI call (or the game goes on with a poisoned state).
         // The exception is cleared here; the result already tells the game the call did not work.

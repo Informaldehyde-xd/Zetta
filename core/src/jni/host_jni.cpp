@@ -3,6 +3,10 @@
 #include "host_jni_internal.h"
 
 #include <atomic>
+#include <unistd.h>
+#include <sys/syscall.h>
+#include <unordered_map>
+#include <chrono>
 #include <mutex>
 #include <string>
 
@@ -13,6 +17,7 @@
 #include <cstring>
 #include <string>
 
+#include "zb/diagnostics.h"
 #include "zb/log.h"
 #include "zb/process.h"
 #include "zb/runtime_report.h"
@@ -381,6 +386,59 @@ std::string g_labels[kRecentLabels];
 std::uint64_t g_label_next = 0;
 
 }  // namespace
+
+namespace {
+struct InFlight {
+    bool used = false;
+    long tid = 0;
+    std::uint64_t id = 0;
+    std::chrono::steady_clock::time_point start;
+};
+constexpr int kInFlight = 32;
+std::mutex g_call_mutex;
+InFlight g_in_flight[kInFlight];
+std::unordered_map<std::uint64_t, std::string> g_method_names;
+}  // namespace
+
+void jni_remember_method(std::uint64_t id, const std::string& name, const std::string& signature) {
+    if (!diagnostics_enabled()) return;
+    std::lock_guard<std::mutex> lock(g_call_mutex);
+    if (g_method_names.size() < 8192) g_method_names.emplace(id, name + " " + signature);
+}
+
+JniCallScope::JniCallScope(std::uint64_t method_id) {
+    if (!diagnostics_enabled()) return;
+    thread_local const long tid = static_cast<long>(::syscall(SYS_gettid));
+    std::lock_guard<std::mutex> lock(g_call_mutex);
+    for (int i = 0; i < kInFlight; ++i) {
+        if (!g_in_flight[i].used) {
+            g_in_flight[i] = {true, tid, method_id, std::chrono::steady_clock::now()};
+            slot_ = i;
+            return;
+        }
+    }
+}
+
+JniCallScope::~JniCallScope() {
+    if (slot_ < 0) return;
+    std::lock_guard<std::mutex> lock(g_call_mutex);
+    g_in_flight[slot_].used = false;
+}
+
+std::string jni_calls_in_progress() {
+    std::lock_guard<std::mutex> lock(g_call_mutex);
+    const auto now = std::chrono::steady_clock::now();
+    std::string out;
+    for (const InFlight& call : g_in_flight) {
+        if (!call.used) continue;
+        const long ms = static_cast<long>(std::chrono::duration_cast<std::chrono::milliseconds>(now - call.start).count());
+        if (ms < 500) continue;
+        auto name = g_method_names.find(call.id);
+        out += "  host thread " + std::to_string(call.tid) + " has been inside the Java method " +
+               (name != g_method_names.end() ? name->second : "(id " + std::to_string(call.id) + ")") + " for " + std::to_string(ms) + " ms\n";
+    }
+    return out.empty() ? std::string("  (no Java call has been running for over half a second)\n") : out;
+}
 
 void jni_note_label(const char* what, const std::string& name, const std::string& signature, bool failed) {
     std::string label = std::string(what) + "(" + name.substr(0, 60);

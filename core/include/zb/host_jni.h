@@ -27,6 +27,23 @@ struct NativeCallCounter;  // core/include/zb/runtime_report.h
 std::string jni_recent_calls();
 // Which classes, fields and methods the guest looked up most recently (the names are what tells a crash
 // report what the game was doing); "FAILED" marks a lookup that found nothing.
+// Which Java method each method id is (remembered when the guest looks it up), and which Java calls are running
+// right now for more than half a second. A guest thread stuck in a call into Java (the usual look of a
+// freeze) names the method it waits for; the debug build only.
+void jni_remember_method(std::uint64_t id, const std::string& name, const std::string& signature);
+std::string jni_calls_in_progress();
+
+class JniCallScope {
+public:
+    explicit JniCallScope(std::uint64_t method_id);
+    ~JniCallScope();
+    JniCallScope(const JniCallScope&) = delete;
+    JniCallScope& operator=(const JniCallScope&) = delete;
+
+private:
+    int slot_ = -1;
+};
+
 void jni_note_label(const char* what, const std::string& name, const std::string& signature, bool failed);
 
 class HostJni {

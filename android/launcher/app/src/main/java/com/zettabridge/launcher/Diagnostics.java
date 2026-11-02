@@ -151,7 +151,7 @@ final class Diagnostics {
         }
     }
 
-    private static final String[] PER_RUN_FILES = {"zb-guestabort.txt", "zb-abort.txt", "zb-freeze.txt", "zb-pause-stall.txt",
+    private static final String[] PER_RUN_FILES = {"zb-faults.txt", "zb-guestabort.txt", "zb-abort.txt", "zb-freeze.txt", "zb-pause-stall.txt",
             "zb-syscalls-busiest.txt", "zb-profile-busiest.txt", "zb-pcprofile-busiest.txt"};
 
     /**
@@ -175,7 +175,7 @@ final class Diagnostics {
     }
 
     // Most useful first: if anything has to be cut, it is the least useful.
-    private static final String[] EVIDENCE_FILES = {"zb-guestabort.txt", "zb-abort.txt", "zb-freeze.txt", "zb-pause-stall.txt",
+    private static final String[] EVIDENCE_FILES = {"zb-faults.txt", "zb-guestabort.txt", "zb-abort.txt", "zb-freeze.txt", "zb-pause-stall.txt",
             "zb-errors.txt", "zb-syscalls-busiest.txt", "zb-memory.txt", "zb-profile-busiest.txt", "zb-pcprofile-busiest.txt"};
 
     /** The screen version: each file is cut to a size that still fits in a message. */

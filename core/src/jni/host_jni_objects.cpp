@@ -35,6 +35,7 @@ bool HostJni::Impl::serve_objects(JniCall& call) {
         const std::string signature = read_string(env, call.arg(2), name);
         const JniBackend::Id id = backend.get_method_id(env, cls, method.c_str(), signature.c_str(), call.arg(3) != 0);
         jni_note_label("GetMethodID", method, signature, id == 0);
+        if (id != 0) jni_remember_method(id, method, signature);
         if (id == 0) {
             // A lookup that fails leaves NoSuchMethodError pending in ART, and the next JNI call
             // made with it pending aborts the process. Old native code often probes for methods

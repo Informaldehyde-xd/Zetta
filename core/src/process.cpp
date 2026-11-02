@@ -1158,6 +1158,7 @@ void Process::install_terminate_reporter() {
                             }
                         }
                     }
+                    freeze += "\nJava calls in progress:\n" + jni_calls_in_progress();
                     freeze += "\nrecent-jni-calls: " + jni_recent_calls().substr(0, 1500) + "\n";
                     write_text_file(kFreezeFile().c_str(), freeze);
                     if (manual_dump) ::unlink(kDumpRequestFile().c_str());

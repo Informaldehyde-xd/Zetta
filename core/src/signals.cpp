@@ -192,6 +192,7 @@ bool Process::dispatch_pending_signals(GuestThread& thread) {
                 text += line;
                 // What the game said just before it ended itself. Mono and its garbage collector print the
                 // reason for an abort (an assertion, "out of memory", a failed signal) before calling it.
+                text += "memory faults the game had before this (first 8):\n" + guest_faults();
                 text += "last lines the game wrote to the log or to stderr:\n" + guest_log_recent();
                 int shown = 0;
                 for (std::uint32_t i = 0; i < 1024 && shown < 24; ++i) {
@@ -240,8 +241,10 @@ bool Process::deliver_fault(GuestThread& thread, const Stop& stop) {
                 std::snprintf(head, sizeof head, "%s at pc 0x%08x, lr 0x%08x",
                               stop.exception == Dynarmic::A32::Exception::Breakpoint ? "breakpoint" : "illegal instruction", stop.pc, r[14]);
             }
-            runtime_report().note_jni_detail("guest-fault-" + std::to_string(n + 1),
-                                             std::string(head) + " | pc in " + describe_address(stop.pc) + " | lr in " + describe_address(r[14]), true);
+            const std::string text = std::string("fault ") + std::to_string(n + 1) + ": " + head + " | pc in " + describe_address(stop.pc) +
+                                     " | lr in " + describe_address(r[14]);
+            guest_fault_note(text);
+            runtime_report().note_jni_detail("guest-fault-" + std::to_string(n + 1), text, true);
         }
     }
     g::siginfo32 info{};
