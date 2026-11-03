@@ -426,6 +426,7 @@ GuestJniEngine::GuestJniEngine(JniBackend& backend, GlBackend* gl_backend, HostG
         });
     }
     host_compat_ = new HostPlatformCompat();
+    host_zlib_ = new HostZlib(*runtime_);
     if (gl_backend != nullptr) {
         host_gl_ = new HostGl(*runtime_, *gl_backend, HostGl::GuestAllocator{}, std::move(egl_context_probe));
     }
@@ -453,13 +454,14 @@ GuestJniEngine::GuestJniEngine(JniBackend& backend, GlBackend* gl_backend, HostG
     HostInput* host_input = host_input_;
     HostConfiguration* host_configuration = host_configuration_;
     HostPlatformCompat* host_compat = host_compat_;
+    HostZlib* host_zlib = host_zlib_;
     // Core ranges never overlap (GLES 0-141, assets 142-159, windows 160-167, EGL 168-211,
     // append-only platform compatibility 212-227, sensors 344-375, JNI 0xFB00+), so the chain
     // order is free;
     // GL stays first because it is by far the hotter path during rendering.
     runtime_->set_host_call_handler([host_jni, host_gl, host_assets, host_windows, host_egl,
                                      host_looper, host_sensors, host_input, host_configuration,
-                                     host_compat](std::uint32_t index, GuestThread& thread) {
+                                     host_compat, host_zlib](std::uint32_t index, GuestThread& thread) {
         if (host_gl != nullptr && host_gl->handle_host_call(index, thread)) return true;
         if (host_assets != nullptr && host_assets->handle_host_call(index, thread)) return true;
         if (host_windows != nullptr && host_windows->handle_host_call(index, thread)) return true;
@@ -468,6 +470,7 @@ GuestJniEngine::GuestJniEngine(JniBackend& backend, GlBackend* gl_backend, HostG
         if (host_sensors->handle_host_call(index, thread)) return true;
         if (host_input != nullptr && host_input->handle_host_call(index, thread)) return true;
         if (host_configuration != nullptr && host_configuration->handle_host_call(index, thread)) return true;
+        if (host_zlib->handle_host_call(index, thread)) return true;
         if (host_compat->handle_host_call(index, thread)) return true;
         return host_jni->handle_host_call(index, thread);
     });

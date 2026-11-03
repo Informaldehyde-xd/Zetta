@@ -6,6 +6,7 @@ add_library(zbcore STATIC
     src/android/host_native_activity.cpp
     src/android/host_sensors.cpp
     src/android/host_platform_compat.cpp
+    src/android/host_zlib.cpp
     src/assets/host_assets.cpp
     src/cp15.cpp
     src/elf_fixups.cpp
@@ -52,7 +53,7 @@ add_library(zbcore STATIC
     src/zbridge_c_api.cpp
 )
 target_include_directories(zbcore PUBLIC include PRIVATE src)
-target_link_libraries(zbcore PUBLIC dynarmic)
+target_link_libraries(zbcore PUBLIC dynarmic z)
 target_compile_options(zbcore PRIVATE -Wall -Wextra)
 
 if (ANDROID)

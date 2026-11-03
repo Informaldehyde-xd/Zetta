@@ -23,6 +23,7 @@
 #include "zb/host_sensors.h"
 #include "zb/host_native_window.h"
 #include "zb/host_platform_compat.h"
+#include "zb/host_zlib.h"
 #include "zb/jni_backend.h"
 #include "zb/jni_loader.h"
 #include "zb/library_runtime.h"
@@ -242,6 +243,7 @@ private:
     HostNativeActivity* host_native_activity_ = nullptr;
     NativeActivityPlatform* native_activity_platform_ = nullptr;
     HostPlatformCompat* host_compat_ = nullptr;
+    HostZlib* host_zlib_ = nullptr;
     JniLoader* loader_;
 };
 

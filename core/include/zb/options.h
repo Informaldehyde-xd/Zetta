@@ -14,6 +14,8 @@ namespace zb {
 //                                        that never check for exceptions.
 //   egl_force_current       (default 0)  Make the game's context current before every eglSwapBuffers.
 //                                        Helps a game that swaps from the wrong thread; costs time.
+//   native_zlib             (default 1)  Run the game's zlib (inflate, uncompress, crc32, adler32) as native
+//                                        arm64 code instead of translating it. Faster loading.
 bool option_enabled(const char* name, bool default_value);
 
 }  // namespace zb
