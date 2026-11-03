@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <chrono>
 #include <mutex>
 #include <string>
@@ -400,7 +401,23 @@ InFlight g_in_flight[kInFlight];
 std::unordered_map<std::uint64_t, std::string> g_method_names;
 }  // namespace
 
+namespace {
+// Ids of the game's own "getCPUType()" Java method (any build, not only the debug one): the compat shim in
+// CallMethodA needs to know it when the game's own code could not read the CPU name.
+std::mutex g_cpu_type_mutex;
+std::unordered_set<std::uint64_t> g_cpu_type_ids;
+}  // namespace
+
+bool jni_is_cpu_type_method(std::uint64_t id) {
+    std::lock_guard<std::mutex> lock(g_cpu_type_mutex);
+    return g_cpu_type_ids.count(id) != 0;
+}
+
 void jni_remember_method(std::uint64_t id, const std::string& name, const std::string& signature) {
+    if (name == "getCPUType" && signature == "()Ljava/lang/String;") {
+        std::lock_guard<std::mutex> lock(g_cpu_type_mutex);
+        g_cpu_type_ids.insert(id);
+    }
     if (!diagnostics_enabled()) return;
     std::lock_guard<std::mutex> lock(g_call_mutex);
     if (g_method_names.size() < 8192) g_method_names.emplace(id, name + " " + signature);

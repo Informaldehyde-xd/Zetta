@@ -36,6 +36,9 @@ std::string jni_calls_in_progress();
 // that returned null or threw into the list of recent lookups. A game that then uses a null string
 // (strlen of a null pointer) is named by the call that handed it the null.
 void jni_note_call(std::uint64_t method_id, bool null_or_threw);
+// True for the game's Java method getCPUType()Ljava/lang/String; (all builds). Old Unity games ask it for the
+// CPU name and then use the answer without a null check.
+bool jni_is_cpu_type_method(std::uint64_t method_id);
 
 class JniCallScope {
 public:

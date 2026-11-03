@@ -137,7 +137,19 @@ bool HostJni::Impl::serve_values(JniCall& call) {
             }
             backend.exception_clear(env);
         }
+        // Old Unity games call a Java method getCPUType() (it reads /proc/cpuinfo) and hand the answer straight
+        // to strlen(). Newer kernels print no "Processor" line, so the Java code finds nothing and returns null
+        // (or throws), and the game dies with a read of address 0. When that happens an ARMv7 name is returned.
+        // Switch: cpu_type_fallback=0 in zb-options.txt turns it off.
+        static const bool cpu_fallback = option_enabled("cpu_type_fallback", true);
+        bool cpu_fallback_used = false;
+        if (cpu_fallback && type == 'L' && result.l == 0 && jni_is_cpu_type_method(static_cast<std::uint64_t>(id))) {
+            result.l = backend.new_string_utf(env, "ARMv7 Processor rev 4 (v7l)");
+            cpu_fallback_used = result.l != 0;
+            if (cpu_fallback_used) log("getCPUType() gave nothing; the game was given \"ARMv7 Processor rev 4 (v7l)\"");
+        }
         jni_note_call(static_cast<std::uint64_t>(id), threw || (type == 'L' && result.l == 0));
+        (void)cpu_fallback_used;
         if (type == 'L') {
             call.set(local(state, result.l));
         } else if (type != 'V') {
