@@ -34,6 +34,7 @@
 #include <cerrno>
 #include <climits>
 #include <csignal>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
@@ -486,6 +487,27 @@ std::int32_t sys_sigaltstack(Ctx& c) {
     return 0;
 }
 
+struct SignalEvent {
+    double seconds;
+    std::int32_t from;
+    std::int32_t to;  // 0 = the whole process
+    std::uint32_t sig;
+    std::int32_t result;
+};
+std::mutex g_signal_log_mutex;
+SignalEvent g_signal_log[64];
+std::size_t g_signal_log_count = 0;
+const std::chrono::steady_clock::time_point g_signal_log_start = std::chrono::steady_clock::now();
+
+void note_signal_event(std::int32_t from, std::int32_t to, std::uint32_t sig, std::int32_t result) {
+    if (sig == 0) return;
+    const double seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - g_signal_log_start).count();
+    std::lock_guard<std::mutex> lock(g_signal_log_mutex);
+    g_signal_log[g_signal_log_count % 64] = SignalEvent{seconds, from, to, sig, result};
+    ++g_signal_log_count;
+}
+
 // kill / tkill / tgkill / rt_tgsigqueueinfo inside the guest process. The signal is queued on
 // the target guest thread; Process delivers it at that thread's next stop.
 std::int32_t sys_send_signal(Ctx& c, bool process_directed, std::int32_t tgid, std::int32_t tid, std::uint32_t sig,
@@ -509,13 +531,16 @@ std::int32_t sys_send_signal(Ctx& c, bool process_directed, std::int32_t tgid, s
             return -EPERM;
         }
         if (sig != 0) c.thread.post_signal(info);
+        note_signal_event(c.thread.tid, 0, sig, 0);
         return 0;
     }
     if (tgid != -1 && tgid != pid) return -ESRCH;
     // Signal 0 only probes for existence and never dereferences the thread.
     if (sig == 0) return c.proc.find_thread(tid) != nullptr ? 0 : -ESRCH;
     // Lookup and post under one lock: the target may be exiting or a carrier lease releasing.
-    return c.proc.post_signal_to(tid, info) ? 0 : -ESRCH;
+    const std::int32_t result = c.proc.post_signal_to(tid, info) ? 0 : -ESRCH;
+    note_signal_event(c.thread.tid, tid, sig, result);
+    return result;
 }
 
 // Waits with a temporary signal mask until this thread has a signal to act on. The guest sees the
@@ -1199,6 +1224,30 @@ std::uint64_t join64(std::uint32_t lo, std::uint32_t hi) {
 }
 
 }  // namespace
+
+std::string recent_guest_signals() {
+    std::lock_guard<std::mutex> lock(g_signal_log_mutex);
+    const double now =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - g_signal_log_start).count();
+    std::string out;
+    char row[160];
+    std::snprintf(row, sizeof row, "  (%zu signals sent so far; now is +%.2f s)\n", g_signal_log_count, now);
+    out += row;
+    const std::size_t total = g_signal_log_count < 64 ? g_signal_log_count : 64;
+    for (std::size_t i = 0; i < total; ++i) {
+        const SignalEvent& e = g_signal_log[(g_signal_log_count - total + i) % 64];
+        if (e.to == 0) {
+            std::snprintf(row, sizeof row, "  +%.2f s  thread %d -> the process  signal %u\n", e.seconds, e.from, e.sig);
+        } else {
+            std::snprintf(row, sizeof row, "  +%.2f s  thread %d -> thread %d  signal %u  %s\n", e.seconds, e.from,
+                          e.to, e.sig, e.result == 0 ? "sent" : "NO SUCH THREAD");
+        }
+        out += row;
+    }
+    if (total == 0) out += "  (none)\n";
+    return out;
+}
+
 
 const char* syscall_name(std::uint32_t nr) {
     for (const auto& entry : kSyscallNames) {
