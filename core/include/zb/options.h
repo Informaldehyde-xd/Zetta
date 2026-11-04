@@ -20,6 +20,10 @@ namespace zb {
 //                                        (8 to 120). When the cache is full the translator throws all
 //                                        of it away and translates the game again, which shows as a
 //                                        stutter. A bigger cache uses more RAM only when it is needed.
+//   gc_unfreeze             (default 0)  Freeze rescue, for testing: when two or more threads sleep in one
+//                                        retry loop for 10 s, clear the lock word they share. Only done
+//                                        when exactly one shared place holds 1. May crash the game, but
+//                                        the game was stopped anyway.
 bool option_enabled(const char* name, bool default_value);
 // A whole-number setting from the same file ("name=96"); the default when it is missing or not a number.
 int option_number(const char* name, int default_value);

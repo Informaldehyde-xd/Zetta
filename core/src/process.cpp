@@ -40,6 +40,7 @@
 #include "profile_extra.h"
 #include "zb/diagnostics.h"
 #include "zb/external_dir.h"
+#include "zb/options.h"
 #include "zb/runtime_report.h"
 #include "zb/syscalls.h"
 
@@ -1271,14 +1272,17 @@ void Process::install_terminate_reporter() {
                         std::uint32_t pc, lr, sp;
                         std::uint64_t pending, blocked;  // guest signals: waiting for delivery / masked (bit n-1 = signal n)
                         bool borrowed;                   // a Java thread running guest code, not a guest-created thread
+                        std::uint32_t regs[13];          // r0-r12, to find a lock that threads wait for
                     };
                     std::vector<Snapshot> snapshots;
                     {
                         std::lock_guard<std::mutex> lock(process->threads_mutex_);
                         auto take = [&](GuestThread* thread, bool borrowed) {
                             const auto& r = thread->regs();
-                            snapshots.push_back({thread->tid, r[15], r[14], r[13], thread->pending_signals(),
-                                                 thread->sigmask, borrowed});
+                            Snapshot snap{thread->tid, r[15], r[14], r[13], thread->pending_signals(),
+                                          thread->sigmask, borrowed, {}};
+                            for (int i = 0; i < 13; ++i) snap.regs[i] = r[i];
+                            snapshots.push_back(snap);
                         };
                         for (GuestThread* thread : process->threads_) take(thread, false);
                         for (GuestThread* thread : process->borrowers_) {
@@ -1354,6 +1358,78 @@ void Process::install_terminate_reporter() {
                                 freeze += row;
                                 ++shown;
                             }
+                        }
+                    }
+                    // Threads that wait in a sleep-and-retry loop for one lock (the garbage collector's
+                    // allocation lock is a spin lock that sleeps between tries) all keep the lock's
+                    // address in a register of that loop. Print the values the stuck threads share
+                    // and what is stored at them. gc_unfreeze=1 in zb-options.txt clears the lock
+                    // when exactly one such place holds 1.
+                    {
+                        std::lock_guard<std::mutex> mm_lock(process->mm_mutex());
+                        std::unordered_map<std::uint32_t, std::vector<const Snapshot*>> by_site;  // lr -> sleeping threads
+                        for (const Snapshot& snap : snapshots) {
+                            for (const ThreadActivitySample& a : waiting) {
+                                if (a.tid == snap.tid && a.in_progress && a.kind == ThreadActivityKind::kSyscall &&
+                                    std::strcmp(syscall_name(a.id), "nanosleep") == 0) {
+                                    by_site[snap.lr].push_back(&snap);
+                                    break;
+                                }
+                            }
+                        }
+                        const std::vector<const Snapshot*>* stuck = nullptr;
+                        std::uint32_t stuck_lr = 0;
+                        for (const auto& [lr, list] : by_site) {
+                            if (list.size() >= 2 && (stuck == nullptr || list.size() > stuck->size())) {
+                                stuck = &list;
+                                stuck_lr = lr;
+                            }
+                        }
+                        if (stuck != nullptr) {
+                            std::snprintf(row, sizeof row,
+                                          "\nlock search: %zu threads sleep in a retry loop at %s\n", stuck->size(),
+                                          process->describe_address(stuck_lr & ~1u).c_str());
+                            freeze += row;
+                            std::vector<std::uint32_t> candidates;
+                            for (int reg = 4; reg < 12; ++reg) {
+                                const std::uint32_t value = (*stuck)[0]->regs[reg];
+                                if (value < kPageSize || (value & 3) != 0) continue;
+                                bool shared = true;
+                                for (const Snapshot* other : *stuck) shared = shared && other->regs[reg] == value;
+                                if (!shared) continue;
+                                if (process->mem_.host_ptr(value, 4, kPageRead | kPageWrite) == nullptr) continue;
+                                if (std::find(candidates.begin(), candidates.end(), value) == candidates.end())
+                                    candidates.push_back(value);
+                            }
+                            std::vector<std::uint32_t> ones;
+                            for (std::uint32_t address : candidates) {
+                                std::uint32_t word = 0;
+                                std::memcpy(&word, process->mem_.host_ptr(address, 4, kPageRead), 4);
+                                std::snprintf(row, sizeof row, "  shared register value %08x holds %u  (%s)\n", address, word,
+                                              process->describe_address(address).c_str());
+                                freeze += row;
+                                if (word == 1) ones.push_back(address);
+                            }
+                            if (candidates.empty()) freeze += "  no value is shared by all of them\n";
+                            static const bool unfreeze = option_enabled("gc_unfreeze", false);
+                            static int unfreeze_tries = 0;
+                            if (unfreeze && !manual_dump && unfreeze_tries < 3) {
+                                ++unfreeze_tries;
+                                if (ones.size() == 1) {
+                                    std::uint8_t* lock_word = process->mem_.host_ptr(ones[0], 4, kPageRead | kPageWrite);
+                                    if (lock_word != nullptr) {
+                                        __atomic_store_n(reinterpret_cast<std::uint32_t*>(lock_word), 0u, __ATOMIC_SEQ_CST);
+                                        std::snprintf(row, sizeof row, "  gc_unfreeze: cleared %08x (try %d)\n", ones[0], unfreeze_tries);
+                                        freeze += row;
+                                        log("gc_unfreeze: cleared the lock word at %08x", ones[0]);
+                                    }
+                                } else {
+                                    std::snprintf(row, sizeof row, "  gc_unfreeze: not done, %zu places hold 1 (need exactly one)\n", ones.size());
+                                    freeze += row;
+                                }
+                            }
+                        } else {
+                            freeze += "\nlock search: no two threads sleep at the same place\n";
                         }
                     }
                     freeze += "\nJava calls in progress:\n" + jni_calls_in_progress();
