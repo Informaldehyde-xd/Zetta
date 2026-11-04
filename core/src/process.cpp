@@ -644,6 +644,35 @@ bool Process::dispatch_stop(GuestThread& thread, const Stop& stop) {
             illegal.pc = stop.pc - 4;
             return fault_or_crash(thread, illegal);
         }
+        if ((stop.swi & 0xFF0000u) == 0xA50000u) {
+            // An ARM swp / swpb that GuestThread::MemoryReadCode rewrote: swap atomically.
+            const bool byte_access = ((stop.swi >> 12) & 1u) != 0;
+            const std::uint32_t rn = (stop.swi >> 8) & 15u;
+            const std::uint32_t rt = (stop.swi >> 4) & 15u;
+            const std::uint32_t rt2 = stop.swi & 15u;
+            auto& r = thread.regs();
+            const std::uint32_t address = r[rn];
+            const std::uint32_t value = r[rt2];
+            std::uint8_t* target = mem_.host_ptr(address, byte_access ? 1 : 4, kPageRead | kPageWrite);
+            if (target == nullptr) {
+                Stop fault;
+                fault.kind = StopKind::Exception;
+                fault.exception = Dynarmic::A32::Exception::UndefinedInstruction;
+                fault.pc = stop.pc - 4;
+                return fault_or_crash(thread, fault);
+            }
+            std::uint32_t old_value = 0;
+            if (byte_access) {
+                old_value = __atomic_exchange_n(target, static_cast<std::uint8_t>(value), __ATOMIC_SEQ_CST);
+            } else if ((address & 3u) == 0) {
+                old_value = __atomic_exchange_n(reinterpret_cast<std::uint32_t*>(target), value, __ATOMIC_SEQ_CST);
+            } else {
+                std::memcpy(&old_value, target, 4);
+                std::memcpy(target, &value, 4);
+            }
+            r[rt] = old_value;
+            return true;
+        }
         if ((stop.swi & 0xFF0000u) == kHostCallBase) {
             const std::uint32_t index = stop.swi & 0xFFFFu;
             record_thread_activity(thread.tid, ThreadActivityKind::kHostCall, index);
@@ -1379,10 +1408,15 @@ void Process::install_terminate_reporter() {
                         }
                         const std::vector<const Snapshot*>* stuck = nullptr;
                         std::uint32_t stuck_lr = 0;
+                        bool stuck_in_mono = false;
                         for (const auto& [lr, list] : by_site) {
-                            if (list.size() >= 2 && (stuck == nullptr || list.size() > stuck->size())) {
+                            const bool in_mono = process->describe_address(lr & ~1u).find("libmono") != std::string::npos;
+                            if (list.size() < 2) continue;
+                            if (stuck == nullptr || (in_mono && !stuck_in_mono) ||
+                                (in_mono == stuck_in_mono && list.size() > stuck->size())) {
                                 stuck = &list;
                                 stuck_lr = lr;
+                                stuck_in_mono = in_mono;
                             }
                         }
                         if (stuck != nullptr) {

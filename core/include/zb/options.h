@@ -24,6 +24,10 @@ namespace zb {
 //                                        retry loop for 10 s, clear the lock word they share. Only done
 //                                        when exactly one shared place holds 1. May crash the game, but
 //                                        the game was stopped anyway.
+//   atomic_swp              (default 1)  Make the ARM "swp" instruction atomic (the translator does it as a
+//                                        read then a write). The old garbage collector in some games
+//                                        locks with swp; without this two threads can break its lock
+//                                        and the game freezes for good.
 bool option_enabled(const char* name, bool default_value);
 // A whole-number setting from the same file ("name=96"); the default when it is missing or not a number.
 int option_number(const char* name, int default_value);

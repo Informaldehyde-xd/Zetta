@@ -5,6 +5,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <bit>
 #include <climits>
 #include <cstring>
@@ -383,7 +384,30 @@ bool GuestThread::MemoryWriteExclusive64(std::uint32_t vaddr, std::uint64_t valu
 
 std::optional<std::uint32_t> GuestThread::MemoryReadCode(std::uint32_t vaddr) {
     if (!mem_.accessible(vaddr, 4, kPageExec)) return std::nullopt;
-    return load<std::uint32_t>(mem_.base() + vaddr);
+    std::uint32_t word = load<std::uint32_t>(mem_.base() + vaddr);
+    // The old garbage collector in the game (libgc in libmono) takes its lock with the ARM "swp"
+    // instruction, which must swap atomically. The translator does it as a read followed by a
+    // write, so two threads can both "win", and a release can be overwritten: the lock then stays
+    // set with nobody holding it and every thread sleeps in the lock's retry loop forever. A swp
+    // is rewritten here into svc #(0xA50000 | b<<12 | Rn<<8 | Rt<<4 | Rt2), which keeps the same
+    // condition code; Process::handle_stop does the swap with a host atomic exchange.
+    // Switch: atomic_swp=0 in zb-options.txt. Only ARM mode has swp (Thumb-2 has none), so
+    // Thumb code is never touched.
+    static const bool atomic_swp = option_enabled("atomic_swp", true);
+    if (atomic_swp && (vaddr & 3u) == 0 && (word & 0x0FB00FF0u) == 0x01000090u && (cpsr() & kCpsrThumb) == 0) {
+        const std::uint32_t rn = (word >> 16) & 15u;
+        const std::uint32_t rt = (word >> 12) & 15u;
+        const std::uint32_t rt2 = word & 15u;
+        if (rn != 15 && rt != 15 && rt2 != 15 && rn != rt && rn != rt2) {
+            static std::atomic<bool> noted{false};
+            if (!noted.exchange(true)) {
+                runtime_report().note_jni_detail("atomic-swp", "first swp rewritten at pc " + std::to_string(vaddr), true);
+            }
+            word = (word & 0xF0000000u) | 0x0F000000u | 0xA50000u | (((word >> 22) & 1u) << 12) | (rn << 8) |
+                   (rt << 4) | rt2;
+        }
+    }
+    return word;
 }
 
 void GuestThread::InterpreterFallback(std::uint32_t pc, std::size_t num_instructions) {
