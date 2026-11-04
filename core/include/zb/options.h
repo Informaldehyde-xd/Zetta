@@ -16,6 +16,12 @@ namespace zb {
 //                                        Helps a game that swaps from the wrong thread; costs time.
 //   native_zlib             (default 1)  Run the game's zlib (inflate, uncompress, crc32, adler32) as native
 //                                        arm64 code instead of translating it. Faster loading.
+//   code_cache_mb           (default 32) Size of the translated-code cache of every guest thread, in MB
+//                                        (8 to 120). When the cache is full the translator throws all
+//                                        of it away and translates the game again, which shows as a
+//                                        stutter. A bigger cache uses more RAM only when it is needed.
 bool option_enabled(const char* name, bool default_value);
+// A whole-number setting from the same file ("name=96"); the default when it is missing or not a number.
+int option_number(const char* name, int default_value);
 
 }  // namespace zb

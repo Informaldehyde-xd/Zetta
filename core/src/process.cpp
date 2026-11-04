@@ -970,14 +970,9 @@ void Process::install_terminate_reporter() {
         // left out, because a waiting thread uses no CPU.
         std::thread([] {
             if (!diagnostics_enabled()) return;
-            std::uint32_t swap_index = 0xFFFFFFFFu;
-            for (std::uint32_t i = 0; i < 1024; ++i) {
-                if (std::strcmp(host_call_name(i).second, "eglSwapBuffers") == 0) {
-                    swap_index = i;
-                    break;
-                }
-            }
-            if (swap_index == 0xFFFFFFFFu) return;
+            // The game's frames are drawn by the Java GLSurfaceView (the guest never calls
+            // eglSwapBuffers itself), so one frame = one nativeRender call.
+            NativeCallCounter& frame_counter = runtime_report().native_call_counter("nativeRender");
 
             using clock = std::chrono::steady_clock;
             auto faults_now = [](unsigned long& minor, unsigned long& major) {
@@ -1081,7 +1076,7 @@ void Process::install_terminate_reporter() {
                 }
 
                 // 2. did a frame finish?
-                const std::uint64_t swaps = g_host_call_count[swap_index].load(std::memory_order_relaxed);
+                const std::uint64_t swaps = frame_counter.count.load(std::memory_order_relaxed);
                 if (swaps == last_swaps) continue;
                 const auto now = clock::now();
                 const double gap_ms = std::chrono::duration<double, std::milli>(now - last_swap_time).count();
@@ -1094,7 +1089,7 @@ void Process::install_terminate_reporter() {
                     faults_now(minor, major);
                     char head[400];
                     std::snprintf(head, sizeof head,
-                                  "stall #%u at %.0f s: %.0f ms without a frame (frames before: about %.0f ms apart)\n"
+                                  "stall #%u at %.0f s: %.0f ms without a frame (frames before: about %.0f ms apart; a frame = one nativeRender call)\n"
                                   "  page faults in the gap: %lu minor, %lu major (a major fault = memory read back from swap/disk)\n"
                                   "  %s\n",
                                   stall_number, std::chrono::duration<double>(now - start_time).count(), gap_ms, smooth_ms,
@@ -1487,7 +1482,7 @@ std::int32_t Process::clone_thread(GuestThread& parent, std::uint32_t flags, std
     if (processor_id < 0) return -EAGAIN;
 
     const std::size_t code_cache_size =
-        parent.child_code_cache_size != 0 ? parent.child_code_cache_size : kDefaultCodeCacheSize;
+        parent.child_code_cache_size != 0 ? parent.child_code_cache_size : default_code_cache_size();
     auto child = std::make_unique<GuestThread>(mem_, monitor_.get(), static_cast<std::size_t>(processor_id),
                                                precise_faults_, code_cache_size);
     child->regs() = parent.regs();

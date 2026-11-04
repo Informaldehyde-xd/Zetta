@@ -32,7 +32,8 @@ inline constexpr std::uint32_t kHostReturnAddress = 0xFFFF0F00;
 int host_interrupt_signal();
 
 // Translated-code cache of one JIT. Carrier JITs only run thread start-up and parking.
-inline constexpr std::size_t kDefaultCodeCacheSize = 32 * 1024 * 1024;
+// 32 MB unless code_cache_mb=N is set in zb-options.txt.
+std::size_t default_code_cache_size();
 inline constexpr std::size_t kCarrierCodeCacheSize = 2 * 1024 * 1024;
 
 struct GuestResult {
@@ -62,7 +63,7 @@ public:
     // committed (needed by guests whose SIGSEGV handlers resume, e.g. Mono). It disables
     // Dynarmic's GetSetElimination, which costs roughly 2x on integer-heavy code.
     GuestThread(GuestMemory& mem, Dynarmic::ExclusiveMonitor* monitor, std::size_t processor_id,
-                bool precise_faults = false, std::size_t code_cache_size = kDefaultCodeCacheSize);
+                bool precise_faults = false, std::size_t code_cache_size = default_code_cache_size());
     ~GuestThread() override;
 
     std::array<std::uint32_t, 16>& regs();
@@ -131,7 +132,7 @@ public:
     int exit_status = 0;
     // Number of host-to-guest calls active on this thread (call() frames).
     int call_depth = 0;
-    // Code cache size for threads this thread clones; 0 selects kDefaultCodeCacheSize.
+    // Code cache size for threads this thread clones; 0 selects default_code_cache_size().
     std::size_t child_code_cache_size = 0;
     // Host tid of the host thread running this guest thread.
     std::int32_t tid = 0;

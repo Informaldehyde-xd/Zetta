@@ -18,6 +18,7 @@
 #include <cstdio>
 
 #include "zb/log.h"
+#include "zb/options.h"
 #include "zb/runtime_report.h"
 
 namespace zb {
@@ -82,6 +83,17 @@ void store(std::uint8_t* p, T v) {
 }
 
 }  // namespace
+
+std::size_t default_code_cache_size() {
+    // The translator emits branches that reach about 128 MB, so the size stays below that.
+    static const std::size_t size = [] {
+        int mb = option_number("code_cache_mb", 32);
+        if (mb < 8) mb = 8;
+        if (mb > 120) mb = 120;
+        return static_cast<std::size_t>(mb) * 1024 * 1024;
+    }();
+    return size;
+}
 
 GuestThread::GuestThread(GuestMemory& mem, Dynarmic::ExclusiveMonitor* monitor, std::size_t processor_id,
                          bool precise_faults, std::size_t code_cache_size)

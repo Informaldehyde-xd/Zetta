@@ -17,6 +17,8 @@ namespace {
 struct Entry {
     std::string name;
     bool value;
+    long number;
+    bool has_number;
 };
 
 std::mutex g_mutex;
@@ -39,7 +41,10 @@ void load_locked() {
         while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) name.pop_back();
         const char* value = equals + 1;
         while (*value == ' ' || *value == '\t') ++value;
-        g_entries.push_back({name, *value != '0' && *value != 'n' && *value != 'f'});
+        char* number_end = nullptr;
+        const long number = std::strtol(value, &number_end, 10);
+        g_entries.push_back({name, *value != '0' && *value != 'n' && *value != 'f', number,
+                             number_end != value});
     }
     std::fclose(file);
 }
@@ -61,6 +66,23 @@ bool option_enabled(const char* name, bool default_value) {
     }
     runtime_report().note_jni_detail("options", all, true);
     return value;
+}
+
+int option_number(const char* name, int default_value) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_loaded) load_locked();
+    long value = default_value;
+    for (const Entry& entry : g_entries) {
+        if (entry.name == name && entry.has_number) value = entry.number;  // the last line wins
+    }
+    g_used.push_back(std::string(name) + "=" + std::to_string(value));
+    std::string all;
+    for (const std::string& item : g_used) {
+        if (!all.empty()) all += ' ';
+        all += item;
+    }
+    runtime_report().note_jni_detail("options", all, true);
+    return static_cast<int>(value);
 }
 
 }  // namespace zb
