@@ -962,6 +962,209 @@ void Process::install_terminate_reporter() {
             }
         }).detach();
 
+        // The stall recorder (debug build only): the game runs smoothly, then one frame takes much
+        // longer (a camera swap, a map swap). Every 10 ms it notes what each busy guest thread is
+        // doing (host call, syscall or translated code) and how many page faults the process has
+        // had. Each time a frame ends after a gap of 120 ms or more, following smooth frames, it adds
+        // an entry to zb-stalls.txt that says what filled that gap. Waiting (futex, sleep, poll) is
+        // left out, because a waiting thread uses no CPU.
+        std::thread([] {
+            if (!diagnostics_enabled()) return;
+            std::uint32_t swap_index = 0xFFFFFFFFu;
+            for (std::uint32_t i = 0; i < 1024; ++i) {
+                if (std::strcmp(host_call_name(i).second, "eglSwapBuffers") == 0) {
+                    swap_index = i;
+                    break;
+                }
+            }
+            if (swap_index == 0xFFFFFFFFu) return;
+
+            using clock = std::chrono::steady_clock;
+            auto faults_now = [](unsigned long& minor, unsigned long& major) {
+                minor = major = 0;
+                char buffer[1024];
+                std::FILE* file = std::fopen("/proc/self/stat", "re");
+                if (file == nullptr) return;
+                const std::size_t got = std::fread(buffer, 1, sizeof buffer - 1, file);
+                std::fclose(file);
+                buffer[got] = 0;
+                const char* close_paren = std::strrchr(buffer, ')');
+                if (close_paren == nullptr) return;
+                std::sscanf(close_paren + 2, "%*c %*d %*d %*d %*d %*d %*u %lu %*u %lu", &minor, &major);
+            };
+            auto memory_line = []() -> std::string {
+                std::string out;
+                std::FILE* file = std::fopen("/proc/self/status", "re");
+                if (file == nullptr) return out;
+                char line[256];
+                while (std::fgets(line, sizeof line, file) != nullptr) {
+                    if (std::strncmp(line, "VmRSS:", 6) == 0 || std::strncmp(line, "VmSwap:", 7) == 0) {
+                        line[std::strcspn(line, "\n")] = 0;
+                        out += out.empty() ? "" : "  ";
+                        std::string text(line);
+                        std::string squeezed;
+                        for (char c : text) {
+                            if (c == '\t' || c == ' ') {
+                                if (!squeezed.empty() && squeezed.back() != ' ') squeezed += ' ';
+                            } else {
+                                squeezed += c;
+                            }
+                        }
+                        out += squeezed;
+                    }
+                }
+                std::fclose(file);
+                return out;
+            };
+            auto is_idle_wait = [](const char* name) {
+                static const char* const waits[] = {"futex", "nanosleep", "clock_nanosleep", "poll", "ppoll",
+                                                    "epoll_wait", "epoll_pwait", "sigsuspend", "_newselect",
+                                                    "pselect6", "wait4", "rt_sigtimedwait", "select"};
+                for (const char* w : waits) {
+                    if (std::strcmp(name, w) == 0) return true;
+                }
+                return false;
+            };
+
+            std::unordered_map<std::string, std::uint32_t> what;        // "host libGLESv2.so:glX" / "syscall madvise"
+            std::unordered_map<std::uint32_t, std::uint32_t> code;      // translated code, pc >> 6
+            std::unordered_map<std::int32_t, std::uint32_t> per_thread;  // busy samples per thread
+            std::uint32_t busy = 0;
+            std::vector<std::string> entries;
+            unsigned stall_number = 0;
+            std::uint64_t last_swaps = 0;
+            auto last_swap_time = clock::now();
+            const auto start_time = last_swap_time;
+            double smooth_ms = 100.0;  // running average of the time between frames
+            unsigned long last_minor = 0, last_major = 0;
+            faults_now(last_minor, last_major);
+
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                Process* process = reporter_process;
+                if (process == nullptr) continue;
+
+                // 1. what is every busy thread doing right now
+                const std::vector<ThreadActivitySample> activity = snapshot_thread_activity();
+                {
+                    std::lock_guard<std::mutex> lock(process->threads_mutex_);
+                    auto sample_one = [&](GuestThread* thread) {
+                        const std::int32_t tid = thread->tid;
+                        for (const ThreadActivitySample& a : activity) {
+                            if (a.tid != tid || !a.in_progress) continue;
+                            if (a.kind == ThreadActivityKind::kHostCall) {
+                                const auto [library, name] = host_call_name(a.id);
+                                if (std::strncmp(name, "ALooper_", 8) == 0) return;  // a wait
+                                what[std::string("host ") + library + ":" + name] += 1;
+                                ++busy;
+                                ++per_thread[tid];
+                                return;
+                            }
+                            if (a.kind == ThreadActivityKind::kSyscall) {
+                                const char* name = syscall_name(a.id);
+                                if (is_idle_wait(name)) return;
+                                what[std::string("syscall ") + name] += 1;
+                                ++busy;
+                                ++per_thread[tid];
+                                return;
+                            }
+                        }
+                        ++code[thread->regs()[15] >> 6];
+                        ++busy;
+                        ++per_thread[tid];
+                    };
+                    for (GuestThread* thread : process->threads_) sample_one(thread);
+                    for (GuestThread* thread : process->borrowers_) {
+                        if (std::find(process->threads_.begin(), process->threads_.end(), thread) == process->threads_.end())
+                            sample_one(thread);
+                    }
+                }
+
+                // 2. did a frame finish?
+                const std::uint64_t swaps = g_host_call_count[swap_index].load(std::memory_order_relaxed);
+                if (swaps == last_swaps) continue;
+                const auto now = clock::now();
+                const double gap_ms = std::chrono::duration<double, std::milli>(now - last_swap_time).count();
+                last_swaps = swaps;
+                last_swap_time = now;
+
+                if (gap_ms >= 120.0 && gap_ms < 10000.0 && smooth_ms < 45.0) {
+                    ++stall_number;
+                    unsigned long minor = 0, major = 0;
+                    faults_now(minor, major);
+                    char head[400];
+                    std::snprintf(head, sizeof head,
+                                  "stall #%u at %.0f s: %.0f ms without a frame (frames before: about %.0f ms apart)\n"
+                                  "  page faults in the gap: %lu minor, %lu major (a major fault = memory read back from swap/disk)\n"
+                                  "  %s\n",
+                                  stall_number, std::chrono::duration<double>(now - start_time).count(), gap_ms, smooth_ms,
+                                  minor - std::min(minor, last_minor), major - std::min(major, last_major),
+                                  memory_line().c_str());
+                    std::string text = head;
+
+                    // name the translated code once, drop threads parked in the guest start-up program
+                    struct Row {
+                        std::string label;
+                        std::uint32_t samples;
+                    };
+                    std::vector<Row> rows;
+                    for (const auto& [label, count] : what) rows.push_back({label, count});
+                    std::uint32_t parked = 0;
+                    {
+                        std::lock_guard<std::mutex> mm(process->mm_mutex());
+                        for (const auto& [block, count] : code) {
+                            const std::string where = process->describe_address(block << 6);
+                            if (where.find("zbhost") != std::string::npos) {
+                                parked += count;
+                                continue;
+                            }
+                            rows.push_back({"code " + where, count});
+                        }
+                    }
+                    const std::uint32_t total = busy > parked ? busy - parked : 0;
+                    std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.samples > b.samples; });
+                    std::snprintf(head, sizeof head, "  busy samples: %u (one sample = 10 ms of one thread)\n", total);
+                    text += head;
+                    for (std::size_t r = 0; r < rows.size() && r < 8; ++r) {
+                        std::snprintf(head, sizeof head, "   %4.1f%%  ", total != 0 ? 100.0 * rows[r].samples / total : 0.0);
+                        text += head;
+                        text += rows[r].label.substr(0, 220);
+                        text += '\n';
+                    }
+                    std::vector<std::pair<std::uint32_t, std::int32_t>> threads;
+                    for (const auto& [tid, count] : per_thread) threads.emplace_back(count, tid);
+                    std::sort(threads.begin(), threads.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+                    text += "  busiest threads:";
+                    for (std::size_t t = 0; t < threads.size() && t < 3; ++t) {
+                        char comm_path[64];
+                        std::snprintf(comm_path, sizeof comm_path, "/proc/self/task/%d/comm", static_cast<int>(threads[t].second));
+                        char name[64] = "?";
+                        if (std::FILE* comm = std::fopen(comm_path, "re")) {
+                            if (std::fgets(name, sizeof name, comm) != nullptr) name[std::strcspn(name, "\n")] = 0;
+                            std::fclose(comm);
+                        }
+                        std::snprintf(head, sizeof head, " %s=%u", name, threads[t].first);
+                        text += head;
+                    }
+                    text += "\n\n";
+                    entries.push_back(text);
+                    if (entries.size() > 40) entries.erase(entries.begin());
+                    std::string all =
+                        "Frames that took 120 ms or more after smooth running (newest last). The percentages\n"
+                        "say what the busy threads were doing during the gap; waiting is not counted.\n\n";
+                    for (const std::string& entry : entries) all += entry;
+                    write_text_file(external_file_path("zb-stalls.txt").c_str(), all);
+                }
+
+                smooth_ms = 0.8 * smooth_ms + 0.2 * std::min(gap_ms, 500.0);
+                faults_now(last_minor, last_major);
+                what.clear();
+                code.clear();
+                per_thread.clear();
+                busy = 0;
+            }
+        }).detach();
+
         // The guest PC sampler: where does a busy guest thread spend its time? Every 5 ms it reads
         // the program counter that each guest thread last committed (block granularity: translated
         // code only writes it back when a block ends) and whether the thread is inside a host call
