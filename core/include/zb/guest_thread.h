@@ -7,6 +7,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <utility>
+#include <vector>
 
 #include <dynarmic/interface/A32/a32.h>
 #include <dynarmic/interface/A32/config.h>
@@ -34,6 +36,12 @@ int host_interrupt_signal();
 // Translated-code cache of one JIT. Carrier JITs only run thread start-up and parking.
 // 32 MB unless code_cache_mb=N is set in zb-options.txt.
 std::size_t default_code_cache_size();
+
+// The words the guest uses as locks are the targets of its atomic stores (strex, swp). Every 8th
+// one is counted here so the freeze report can name the busiest ones; a lock left set shows up as a
+// busy word that holds 1 while every thread sleeps.
+void note_atomic_store(std::uint32_t vaddr);
+std::vector<std::pair<std::uint32_t, std::uint32_t>> hot_atomic_words(std::size_t most);  // (address, count)
 inline constexpr std::size_t kCarrierCodeCacheSize = 2 * 1024 * 1024;
 
 struct GuestResult {

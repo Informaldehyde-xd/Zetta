@@ -5,6 +5,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <bit>
 #include <climits>
@@ -84,6 +85,41 @@ void store(std::uint8_t* p, T v) {
 }
 
 }  // namespace
+
+namespace {
+constexpr std::size_t kAtomicSlots = 512;
+std::atomic<std::uint32_t> g_atomic_address[kAtomicSlots];
+std::atomic<std::uint32_t> g_atomic_count[kAtomicSlots];
+thread_local std::uint32_t t_atomic_tick = 0;
+}  // namespace
+
+void note_atomic_store(std::uint32_t vaddr) {
+    if ((++t_atomic_tick & 7u) != 0) return;
+    std::size_t slot = (vaddr >> 2) * 2654435761u % kAtomicSlots;
+    for (int probe = 0; probe < 8; ++probe, slot = (slot + 1) % kAtomicSlots) {
+        std::uint32_t seen = g_atomic_address[slot].load(std::memory_order_relaxed);
+        if (seen == 0) {
+            std::uint32_t empty = 0;
+            if (g_atomic_address[slot].compare_exchange_strong(empty, vaddr)) seen = vaddr;
+            else seen = empty;
+        }
+        if (seen == vaddr) {
+            g_atomic_count[slot].fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
+}
+
+std::vector<std::pair<std::uint32_t, std::uint32_t>> hot_atomic_words(std::size_t most) {
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> all;
+    for (std::size_t i = 0; i < kAtomicSlots; ++i) {
+        const std::uint32_t address = g_atomic_address[i].load(std::memory_order_relaxed);
+        if (address != 0) all.emplace_back(address, g_atomic_count[i].load(std::memory_order_relaxed));
+    }
+    std::sort(all.begin(), all.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    if (all.size() > most) all.resize(most);
+    return all;
+}
 
 std::size_t default_code_cache_size() {
     // The translator emits branches that reach about 128 MB, so the size stays below that.
@@ -371,6 +407,7 @@ bool GuestThread::MemoryWriteExclusive16(std::uint32_t vaddr, std::uint16_t valu
 }
 
 bool GuestThread::MemoryWriteExclusive32(std::uint32_t vaddr, std::uint32_t value, std::uint32_t expected) {
+    note_atomic_store(vaddr);
     if (!check_access(vaddr, 4, kPageRead | kPageWrite, true) || load<std::uint32_t>(mem_.base() + vaddr) != expected) return false;
     store(mem_.base() + vaddr, value);
     return true;

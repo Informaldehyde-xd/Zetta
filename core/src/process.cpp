@@ -661,6 +661,7 @@ bool Process::dispatch_stop(GuestThread& thread, const Stop& stop) {
                 fault.pc = stop.pc - 4;
                 return fault_or_crash(thread, fault);
             }
+            note_atomic_store(address);
             std::uint32_t old_value = 0;
             if (byte_access) {
                 old_value = __atomic_exchange_n(target, static_cast<std::uint8_t>(value), __ATOMIC_SEQ_CST);
@@ -1445,21 +1446,43 @@ void Process::install_terminate_reporter() {
                                 if (word == 1) ones.push_back(address);
                             }
                             if (candidates.empty()) freeze += "  no value is shared by all of them\n";
+                            // The busiest atomic-store targets of the whole run, and what they hold now.
+                            struct HotWord {
+                                std::uint32_t address, count, word;
+                                bool in_game_library;
+                            };
+                            std::vector<HotWord> hot_words;
+                            freeze += "  busiest atomic words (address, uses counted, value now):\n";
+                            for (const auto& [address, count] : hot_atomic_words(10)) {
+                                std::uint32_t word = 0;
+                                const std::uint8_t* word_ptr = process->mem_.host_ptr(address, 4, kPageRead);
+                                if (word_ptr != nullptr) std::memcpy(&word, word_ptr, 4);
+                                const std::string where = process->describe_address(address);
+                                const bool in_game = where.find("/sysroot/") == std::string::npos && where.find("zbhost") == std::string::npos;
+                                std::snprintf(row, sizeof row, "    %08x  %6u  holds %-9u  %s\n", address, count, word, where.c_str());
+                                freeze += row;
+                                hot_words.push_back({address, count, word, in_game});
+                            }
+                            // gc_unfreeze: the lock is the busiest atomic word that is set (1 or 2) right now,
+                            // outside the system libraries, while threads sleep in a retry loop.
                             static const bool unfreeze = option_enabled("gc_unfreeze", false);
                             static int unfreeze_tries = 0;
                             if (unfreeze && !manual_dump && unfreeze_tries < 3) {
                                 ++unfreeze_tries;
-                                if (ones.size() == 1) {
-                                    std::uint8_t* lock_word = process->mem_.host_ptr(ones[0], 4, kPageRead | kPageWrite);
+                                const HotWord* pick = nullptr;
+                                for (const HotWord& hw : hot_words) {
+                                    if (hw.in_game_library && (hw.word == 1 || hw.word == 2) && (pick == nullptr || hw.count > pick->count)) pick = &hw;
+                                }
+                                if (pick != nullptr) {
+                                    std::uint8_t* lock_word = process->mem_.host_ptr(pick->address, 4, kPageRead | kPageWrite);
                                     if (lock_word != nullptr) {
                                         __atomic_store_n(reinterpret_cast<std::uint32_t*>(lock_word), 0u, __ATOMIC_SEQ_CST);
-                                        std::snprintf(row, sizeof row, "  gc_unfreeze: cleared %08x (try %d)\n", ones[0], unfreeze_tries);
+                                        std::snprintf(row, sizeof row, "  gc_unfreeze: cleared %08x (try %d)\n", pick->address, unfreeze_tries);
                                         freeze += row;
-                                        log("gc_unfreeze: cleared the lock word at %08x", ones[0]);
+                                        log("gc_unfreeze: cleared the lock word at %08x", pick->address);
                                     }
                                 } else {
-                                    std::snprintf(row, sizeof row, "  gc_unfreeze: not done, %zu places hold 1 (need exactly one)\n", ones.size());
-                                    freeze += row;
+                                    freeze += "  gc_unfreeze: not done, no busy atomic word holds 1 or 2\n";
                                 }
                             }
                         } else {
