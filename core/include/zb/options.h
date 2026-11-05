@@ -31,6 +31,8 @@ namespace zb {
 //   atomic_exclusive        (default 1)  Make store-exclusive (strex) one atomic compare-and-swap. Without it a
 //                                        lock release can be overwritten by a waiter and the lock stays
 //                                        set for good (a mid-game freeze with the video stopped).
+//   meter                   (default 1)  Debug build only: write zb-meter.txt (FPS, slowest frame, CPU, RAM,
+//                                        busiest threads) twice a second for the on-screen readout.
 bool option_enabled(const char* name, bool default_value);
 // A whole-number setting from the same file ("name=96"); the default when it is missing or not a number.
 int option_number(const char* name, int default_value);

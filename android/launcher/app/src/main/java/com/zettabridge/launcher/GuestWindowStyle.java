@@ -47,6 +47,7 @@ final class GuestWindowStyle {
         // thread that is busy loading, the main thread stops answering, and Android kills the
         // process ("bg anr"). Games always want the screen on.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        PerfMeter.attach(activity);  // debug build only: FPS and CPU readout
         try {
             AspectLetterbox.apply(activity);
         } catch (RuntimeException e) {

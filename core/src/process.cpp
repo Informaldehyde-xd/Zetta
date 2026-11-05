@@ -14,6 +14,8 @@
 #include <atomic>
 #include <chrono>
 #include <exception>
+#include <dirent.h>
+#include <unistd.h>
 #include <mutex>
 
 #include <cerrno>
@@ -1065,10 +1067,108 @@ void Process::install_terminate_reporter() {
             unsigned long last_minor = 0, last_major = 0;
             faults_now(last_minor, last_major);
 
+            // The FPS and CPU meter: zb-meter.txt, rewritten twice a second, shown by PerfMeter.java.
+            // Game FPS = nativeRender calls per second. CPU = this process's user + system time.
+            // meter=0 in zb-options.txt stops it.
+            const bool meter_on = option_enabled("meter", true);
+            const long clock_ticks = sysconf(_SC_CLK_TCK) > 0 ? sysconf(_SC_CLK_TCK) : 100;
+            auto meter_last_time = clock::now();
+            std::uint64_t meter_last_frames = frame_counter.count.load(std::memory_order_relaxed);
+            std::uint64_t meter_seen_frames = meter_last_frames;
+            auto meter_frame_time = meter_last_time;
+            double meter_worst_ms = 0;
+            unsigned long meter_last_process_ticks = 0;
+            std::unordered_map<std::int32_t, unsigned long> meter_last_thread_ticks;
+            // user + system ticks from a /proc stat line; the name sits between the first '(' and the last ')'
+            auto read_ticks = [](const char* path, unsigned long& ticks, std::string* name) {
+                ticks = 0;
+                char buffer[1024];
+                std::FILE* file = std::fopen(path, "re");
+                if (file == nullptr) return false;
+                const std::size_t got = std::fread(buffer, 1, sizeof buffer - 1, file);
+                std::fclose(file);
+                buffer[got] = 0;
+                const char* open_paren = std::strchr(buffer, '(');
+                const char* close_paren = std::strrchr(buffer, ')');
+                if (open_paren == nullptr || close_paren == nullptr || close_paren < open_paren) return false;
+                if (name != nullptr) name->assign(open_paren + 1, close_paren);
+                unsigned long user = 0, system = 0;
+                if (std::sscanf(close_paren + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu", &user, &system) != 2)
+                    return false;
+                ticks = user + system;
+                return true;
+            };
+            read_ticks("/proc/self/stat", meter_last_process_ticks, nullptr);
+
             for (;;) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 Process* process = reporter_process;
                 if (process == nullptr) continue;
+
+                if (meter_on) {
+                    const auto meter_now = clock::now();
+                    const std::uint64_t frames_now = frame_counter.count.load(std::memory_order_relaxed);
+                    if (frames_now != meter_seen_frames) {
+                        meter_worst_ms = std::max(meter_worst_ms,
+                                                  std::chrono::duration<double, std::milli>(meter_now - meter_frame_time).count());
+                        meter_seen_frames = frames_now;
+                        meter_frame_time = meter_now;
+                    }
+                    const double meter_seconds = std::chrono::duration<double>(meter_now - meter_last_time).count();
+                    if (meter_seconds >= 0.5) {
+                        // a stretch with no frame at all counts as one long frame
+                        meter_worst_ms = std::max(meter_worst_ms,
+                                                  std::chrono::duration<double, std::milli>(meter_now - meter_frame_time).count());
+                        const double fps = (frames_now - meter_last_frames) / meter_seconds;
+                        unsigned long process_ticks = 0;
+                        read_ticks("/proc/self/stat", process_ticks, nullptr);
+                        const double cpu = 100.0 * (process_ticks - std::min(process_ticks, meter_last_process_ticks)) /
+                                           (static_cast<double>(clock_ticks) * meter_seconds);
+                        // the busiest threads over this stretch
+                        std::vector<std::pair<double, std::string>> busy;
+                        if (DIR* dir = opendir("/proc/self/task")) {
+                            while (dirent* entry = readdir(dir)) {
+                                const int tid = std::atoi(entry->d_name);
+                                if (tid <= 0) continue;
+                                char path[64];
+                                std::snprintf(path, sizeof path, "/proc/self/task/%d/stat", tid);
+                                unsigned long ticks = 0;
+                                std::string name;
+                                if (!read_ticks(path, ticks, &name)) continue;
+                                const unsigned long before = meter_last_thread_ticks.count(tid) ? meter_last_thread_ticks[tid] : ticks;
+                                meter_last_thread_ticks[tid] = ticks;
+                                const double percent = 100.0 * (ticks - std::min(ticks, before)) /
+                                                       (static_cast<double>(clock_ticks) * meter_seconds);
+                                if (percent >= 3.0) busy.emplace_back(percent, name);
+                            }
+                            closedir(dir);
+                        }
+                        std::sort(busy.begin(), busy.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+                        unsigned long ram_pages = 0;
+                        if (std::FILE* statm = std::fopen("/proc/self/statm", "re")) {
+                            unsigned long size_pages = 0;
+                            if (std::fscanf(statm, "%lu %lu", &size_pages, &ram_pages) != 2) ram_pages = 0;
+                            std::fclose(statm);
+                        }
+                        char line[160];
+                        std::string text;
+                        std::snprintf(line, sizeof line, "FPS %.1f  slowest %.0f ms\n", fps, meter_worst_ms);
+                        text += line;
+                        std::snprintf(line, sizeof line, "CPU %.0f%% (100 = one core)  RAM %lu MB\n", cpu,
+                                      ram_pages * static_cast<unsigned long>(sysconf(_SC_PAGESIZE)) / (1024 * 1024));
+                        text += line;
+                        for (std::size_t i = 0; i < busy.size() && i < 3; ++i) {
+                            std::snprintf(line, sizeof line, "%.14s %.0f%%%s", busy[i].second.c_str(), busy[i].first,
+                                          i + 1 < busy.size() && i < 2 ? "  " : "");
+                            text += line;
+                        }
+                        write_text_file(external_file_path("zb-meter.txt").c_str(), text);
+                        meter_last_time = meter_now;
+                        meter_last_frames = frames_now;
+                        meter_last_process_ticks = process_ticks;
+                        meter_worst_ms = 0;
+                    }
+                }
 
                 // 1. what is every busy thread doing right now
                 const std::vector<ThreadActivitySample> activity = snapshot_thread_activity();
