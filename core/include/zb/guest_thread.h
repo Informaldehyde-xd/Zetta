@@ -47,8 +47,12 @@ struct AtomicWordInfo {
     std::int32_t last_tid;
     std::uint32_t last_value;
     std::uint32_t last_ms;  // when, in ms since the process started
+    // The last thread that took the word from 0 to non-zero. A retry loop stores 1 even when the lock
+    // is taken, so the last store alone does not name the owner; this does.
+    std::int32_t acquire_tid;
+    std::uint32_t acquire_ms;
 };
-void note_atomic_store(std::uint32_t vaddr, std::int32_t tid, std::uint32_t value);
+void note_atomic_store(std::uint32_t vaddr, std::int32_t tid, std::uint32_t value, std::uint32_t old_value);
 std::vector<AtomicWordInfo> hot_atomic_words(std::size_t most);
 std::uint32_t process_uptime_ms();
 inline constexpr std::size_t kCarrierCodeCacheSize = 2 * 1024 * 1024;

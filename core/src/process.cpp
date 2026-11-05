@@ -661,7 +661,6 @@ bool Process::dispatch_stop(GuestThread& thread, const Stop& stop) {
                 fault.pc = stop.pc - 4;
                 return fault_or_crash(thread, fault);
             }
-            note_atomic_store(address, thread.tid, value);
             std::uint32_t old_value = 0;
             if (byte_access) {
                 old_value = __atomic_exchange_n(target, static_cast<std::uint8_t>(value), __ATOMIC_SEQ_CST);
@@ -671,6 +670,7 @@ bool Process::dispatch_stop(GuestThread& thread, const Stop& stop) {
                 std::memcpy(&old_value, target, 4);
                 std::memcpy(target, &value, 4);
             }
+            note_atomic_store(address, thread.tid, value, old_value);
             r[rt] = old_value;
             return true;
         }
@@ -1454,7 +1454,7 @@ void Process::install_terminate_reporter() {
                                 bool in_game_library;
                             };
                             std::vector<HotWord> hot_words;
-                            freeze += "  busiest atomic words (address, uses counted, value now, last strex):\n";
+                            freeze += "  busiest atomic words (address, uses counted, value now, who stored and took it):\n";
                             const std::uint32_t uptime_now = process_uptime_ms();
                             for (const AtomicWordInfo& info : hot_atomic_words(10)) {
                                 std::uint32_t word = 0;
@@ -1465,11 +1465,29 @@ void Process::install_terminate_reporter() {
                                 bool alive = false;
                                 for (const Snapshot& snap : snapshots) alive = alive || snap.tid == info.last_tid;
                                 std::snprintf(row, sizeof row,
-                                              "    %08x  %7u  holds %-10u  %s\n      last strex: wrote %u, thread %d (%s), %.1f s ago\n",
+                                              "    %08x  %7u  holds %-10u  %s\n      last store: wrote %u, thread %d (%s), %.1f s ago\n",
                                               info.address, info.count, word, where.c_str(), info.last_value, info.last_tid,
                                               alive ? "still exists" : "GONE",
                                               (uptime_now - info.last_ms) / 1000.0);
                                 freeze += row;
+                                if (info.acquire_tid != 0) {
+                                    bool owner_alive = false;
+                                    const Snapshot* owner = nullptr;
+                                    for (const Snapshot& snap : snapshots) {
+                                        if (snap.tid == info.acquire_tid) {
+                                            owner_alive = true;
+                                            owner = &snap;
+                                        }
+                                    }
+                                    std::snprintf(row, sizeof row, "      LAST TAKEN (0 -> set) by thread %d (%s), %.1f s ago", info.acquire_tid,
+                                                  owner_alive ? "still exists" : "GONE", (uptime_now - info.acquire_ms) / 1000.0);
+                                    freeze += row;
+                                    if (owner != nullptr) {
+                                        freeze += ", now at " + process->describe_address(owner->pc & ~1u) + " (lr " +
+                                                  process->describe_address(owner->lr & ~1u) + ")";
+                                    }
+                                    freeze += "\n";
+                                }
                                 hot_words.push_back({info.address, info.count, word, in_game});
                             }
                             // gc_unfreeze: the lock is the busiest atomic word that is set (1 or 2) right now,

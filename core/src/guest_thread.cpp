@@ -94,6 +94,8 @@ std::atomic<std::uint32_t> g_atomic_count[kAtomicSlots];
 std::atomic<std::int32_t> g_atomic_tid[kAtomicSlots];
 std::atomic<std::uint32_t> g_atomic_value[kAtomicSlots];
 std::atomic<std::uint32_t> g_atomic_ms[kAtomicSlots];
+std::atomic<std::int32_t> g_atomic_acquire_tid[kAtomicSlots];
+std::atomic<std::uint32_t> g_atomic_acquire_ms[kAtomicSlots];
 thread_local std::uint32_t t_atomic_tick = 0;
 const std::chrono::steady_clock::time_point g_uptime_start = std::chrono::steady_clock::now();
 }  // namespace
@@ -104,7 +106,7 @@ std::uint32_t process_uptime_ms() {
 }
 
 // A word already in the table is followed on every store; a new word is only picked up on every 8th.
-void note_atomic_store(std::uint32_t vaddr, std::int32_t tid, std::uint32_t value) {
+void note_atomic_store(std::uint32_t vaddr, std::int32_t tid, std::uint32_t value, std::uint32_t old_value) {
     const bool sampled = (++t_atomic_tick & 7u) == 0;
     std::size_t slot = (vaddr >> 2) * 2654435761u % kAtomicSlots;
     for (int probe = 0; probe < 8; ++probe, slot = (slot + 1) % kAtomicSlots) {
@@ -119,7 +121,12 @@ void note_atomic_store(std::uint32_t vaddr, std::int32_t tid, std::uint32_t valu
             g_atomic_count[slot].fetch_add(1, std::memory_order_relaxed);
             g_atomic_tid[slot].store(tid, std::memory_order_relaxed);
             g_atomic_value[slot].store(value, std::memory_order_relaxed);
-            g_atomic_ms[slot].store(process_uptime_ms(), std::memory_order_relaxed);
+            const std::uint32_t now_ms = process_uptime_ms();
+            g_atomic_ms[slot].store(now_ms, std::memory_order_relaxed);
+            if (old_value == 0 && value != 0) {
+                g_atomic_acquire_tid[slot].store(tid, std::memory_order_relaxed);
+                g_atomic_acquire_ms[slot].store(now_ms, std::memory_order_relaxed);
+            }
             return;
         }
     }
@@ -132,7 +139,8 @@ std::vector<AtomicWordInfo> hot_atomic_words(std::size_t most) {
         if (address == 0) continue;
         all.push_back({address, g_atomic_count[i].load(std::memory_order_relaxed),
                        g_atomic_tid[i].load(std::memory_order_relaxed), g_atomic_value[i].load(std::memory_order_relaxed),
-                       g_atomic_ms[i].load(std::memory_order_relaxed)});
+                       g_atomic_ms[i].load(std::memory_order_relaxed), g_atomic_acquire_tid[i].load(std::memory_order_relaxed),
+                       g_atomic_acquire_ms[i].load(std::memory_order_relaxed)});
     }
     std::sort(all.begin(), all.end(), [](const AtomicWordInfo& x, const AtomicWordInfo& y) { return x.count > y.count; });
     if (all.size() > most) all.resize(most);
@@ -411,30 +419,51 @@ void GuestThread::MemoryWrite64(std::uint32_t vaddr, std::uint64_t value) {
     if (check_access(vaddr, 8, kPageWrite, true)) store(mem_.base() + vaddr, value);
 }
 
-// The ExclusiveMonitor serializes these calls; compare-then-write is atomic under its lock.
+namespace {
+
+// Store-exclusive as ONE host compare-and-swap. The ExclusiveMonitor only serializes exclusive
+// operations against each other. The owner of a spin lock releases it with a plain store
+// ("lock = 0"), and a waiter's retry loop stores 1 even when the lock is taken. With a separate
+// compare and write, that release could land between the waiter's compare and its write; the
+// waiter's write then put the 1 back, and the lock stayed set with nobody holding it. On real ARM
+// a plain store clears the other thread's reservation, so that strex would fail. A compare-and-swap
+// gives the same result: if the release came first the compare fails, if it came second it wins.
+template <typename T>
+bool compare_and_store(std::uint8_t* base, std::uint32_t vaddr, T value, T expected) {
+    static const bool atomic_exclusive = option_enabled("atomic_exclusive", true);
+    if (!atomic_exclusive || (vaddr & (sizeof(T) - 1)) != 0) {  // switch off, or not naturally aligned
+        T current;
+        std::memcpy(&current, base + vaddr, sizeof(T));
+        if (current != expected) return false;
+        std::memcpy(base + vaddr, &value, sizeof(T));
+        return true;
+    }
+    return __atomic_compare_exchange_n(reinterpret_cast<T*>(base + vaddr), &expected, value, false, __ATOMIC_SEQ_CST,
+                                       __ATOMIC_SEQ_CST);
+}
+
+}  // namespace
+
 bool GuestThread::MemoryWriteExclusive8(std::uint32_t vaddr, std::uint8_t value, std::uint8_t expected) {
-    if (!check_access(vaddr, 1, kPageRead | kPageWrite, true) || mem_.base()[vaddr] != expected) return false;
-    mem_.base()[vaddr] = value;
-    return true;
+    if (!check_access(vaddr, 1, kPageRead | kPageWrite, true)) return false;
+    return compare_and_store<std::uint8_t>(mem_.base(), vaddr, value, expected);
 }
 
 bool GuestThread::MemoryWriteExclusive16(std::uint32_t vaddr, std::uint16_t value, std::uint16_t expected) {
-    if (!check_access(vaddr, 2, kPageRead | kPageWrite, true) || load<std::uint16_t>(mem_.base() + vaddr) != expected) return false;
-    store(mem_.base() + vaddr, value);
-    return true;
+    if (!check_access(vaddr, 2, kPageRead | kPageWrite, true)) return false;
+    return compare_and_store<std::uint16_t>(mem_.base(), vaddr, value, expected);
 }
 
 bool GuestThread::MemoryWriteExclusive32(std::uint32_t vaddr, std::uint32_t value, std::uint32_t expected) {
-    if (!check_access(vaddr, 4, kPageRead | kPageWrite, true) || load<std::uint32_t>(mem_.base() + vaddr) != expected) return false;
-    store(mem_.base() + vaddr, value);
-    note_atomic_store(vaddr, tid, value);
+    if (!check_access(vaddr, 4, kPageRead | kPageWrite, true)) return false;
+    if (!compare_and_store<std::uint32_t>(mem_.base(), vaddr, value, expected)) return false;
+    note_atomic_store(vaddr, tid, value, expected);
     return true;
 }
 
 bool GuestThread::MemoryWriteExclusive64(std::uint32_t vaddr, std::uint64_t value, std::uint64_t expected) {
-    if (!check_access(vaddr, 8, kPageRead | kPageWrite, true) || load<std::uint64_t>(mem_.base() + vaddr) != expected) return false;
-    store(mem_.base() + vaddr, value);
-    return true;
+    if (!check_access(vaddr, 8, kPageRead | kPageWrite, true)) return false;
+    return compare_and_store<std::uint64_t>(mem_.base(), vaddr, value, expected);
 }
 
 std::optional<std::uint32_t> GuestThread::MemoryReadCode(std::uint32_t vaddr) {

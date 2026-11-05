@@ -28,6 +28,9 @@ namespace zb {
 //                                        read then a write). The old garbage collector in some games
 //                                        locks with swp; without this two threads can break its lock
 //                                        and the game freezes for good.
+//   atomic_exclusive        (default 1)  Make store-exclusive (strex) one atomic compare-and-swap. Without it a
+//                                        lock release can be overwritten by a waiter and the lock stays
+//                                        set for good (a mid-game freeze with the video stopped).
 bool option_enabled(const char* name, bool default_value);
 // A whole-number setting from the same file ("name=96"); the default when it is missing or not a number.
 int option_number(const char* name, int default_value);
