@@ -50,6 +50,17 @@ bool HostZlib::handle_host_call(std::uint32_t index, GuestThread& thread) {
         return true;
     }
 
+    if (index == ZB_ZLIB_HC_MALLOC_PROBE) {
+        static const bool keep = option_enabled("malloc_keep_memory", true);
+        static bool announced = false;
+        if (!announced) {
+            announced = true;
+            log("guest allocator keeps freed memory: %s", keep ? "ON" : "OFF (malloc_keep_memory=0)");
+        }
+        regs[0] = keep ? 1u : 0u;
+        return true;
+    }
+
     if (index == ZB_ZLIB_HC_CRC32 || index == ZB_ZLIB_HC_ADLER32) {
         const std::uint32_t start = regs[0];
         const std::uint32_t address = regs[1];

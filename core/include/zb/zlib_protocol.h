@@ -13,7 +13,8 @@
 #define ZB_ZLIB_HC_ADLER32 706       /* r0 = adler, r1 = buf, r2 = len */
 #define ZB_ZLIB_HC_UNCOMPRESS 707    /* r0 = dest, r1 = &destLen, r2 = src, r3 = srcLen */
 #define ZB_ZLIB_HC_PROBE 708         /* r0 = 1 when native zlib is switched on, else 0 */
-#define ZB_ZLIB_HC_LAST 708
+#define ZB_ZLIB_HC_MALLOC_PROBE 709  /* r0 = 1 when the allocator should keep freed memory, else 0 */
+#define ZB_ZLIB_HC_LAST 709
 
 #define ZB_ZLIB_MAGIC 0x425A5A4Eu
 

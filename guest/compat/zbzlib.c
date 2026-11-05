@@ -6,6 +6,7 @@
  * Not covered (the game keeps using libz for them): deflate*, gz*, inflateSync, inflateCopy,
  * inflatePrime, inflateGetHeader. Compile with -marm: svc needs ARM state. */
 #include <dlfcn.h>
+#include <malloc.h>
 #include <stdlib.h>
 #include <string.h>
 #include <zlib.h>
@@ -171,4 +172,15 @@ uLong adler32(uLong adler, const Bytef* buf, uInt len) {
     if (native()) return (uLong)ZB_HC(ZB_ZLIB_HC_ADLER32, adler, buf, len, 0);
     uLong (*fn)(uLong, const Bytef*, uInt) = (uLong (*)(uLong, const Bytef*, uInt))real("adler32");
     return fn != NULL ? fn(adler, buf, len) : 1;
+}
+
+/* The guest's allocator (scudo) hands freed memory back to the system on a short timer, and the
+ * game then touches it again: a loading screen of one game showed 1.1 million page faults in 9
+ * seconds. mallopt(M_DECAY_TIME, 1) switches the automatic release to its least eager setting.
+ * Switch: malloc_keep_memory=0 in zb-options.txt. */
+#ifndef M_DECAY_TIME
+#define M_DECAY_TIME (-100)
+#endif
+__attribute__((constructor)) static void zb_malloc_tune(void) {
+    if (ZB_HC(ZB_ZLIB_HC_MALLOC_PROBE, 0, 0, 0, 0) != 0) mallopt(M_DECAY_TIME, 1);
 }
