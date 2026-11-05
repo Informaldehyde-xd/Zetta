@@ -148,11 +148,13 @@ std::vector<AtomicWordInfo> hot_atomic_words(std::size_t most) {
 }
 
 std::size_t default_code_cache_size() {
-    // The translator emits branches that reach about 128 MB, so the size stays below that.
+    // 120 MB unless code_cache_mb=N is set in zb-options.txt. Above about 128 MB the translator's
+    // branches may not reach, so values from 128 to 512 are for testing only: if a game does not
+    // start with one, lower it.
     static const std::size_t size = [] {
-        int mb = option_number("code_cache_mb", 32);
+        int mb = option_number("code_cache_mb", 120);
         if (mb < 8) mb = 8;
-        if (mb > 120) mb = 120;
+        if (mb > 512) mb = 512;
         return static_cast<std::size_t>(mb) * 1024 * 1024;
     }();
     return size;

@@ -6,9 +6,9 @@ namespace zb {
 // zb-options.txt in the launcher's external files folder (lines "name=0" or "name=1"; "#" starts a
 // comment). A switch that is not listed keeps the default the caller passes.
 //
-//   interruptible_syscalls  (default 0)  Let a guest signal end a wait inside any blocking system
-//                                        call. Fixes some garbage-collector stalls, but changes every
-//                                        blocking call; keep off unless a freeze needs it.
+//   interruptible_syscalls  (default 1)  Let a guest signal end a wait inside any blocking system
+//                                        call, so a garbage collector that stops the world cannot wait
+//                                        for a thread asleep in a call that ignored the signal.
 //   jni_clear_exceptions    (default 1)  Clear a Java exception left by a JNI method call, as the
 //                                        old Dalvik did not abort on one. Prevents crashes in games
 //                                        that never check for exceptions.
@@ -16,8 +16,8 @@ namespace zb {
 //                                        Helps a game that swaps from the wrong thread; costs time.
 //   native_zlib             (default 1)  Run the game's zlib (inflate, uncompress, crc32, adler32) as native
 //                                        arm64 code instead of translating it. Faster loading.
-//   code_cache_mb           (default 32) Size of the translated-code cache of every guest thread, in MB
-//                                        (8 to 120). When the cache is full the translator throws all
+//   code_cache_mb           (default 120) Size of the translated-code cache of every guest thread, in MB
+//                                        (8 to 512; above about 128 is for testing only). When the cache is full the translator throws all
 //                                        of it away and translates the game again, which shows as a
 //                                        stutter. A bigger cache uses more RAM only when it is needed.
 //   gc_unfreeze             (default 0)  Freeze rescue, for testing: when two or more threads sleep in one

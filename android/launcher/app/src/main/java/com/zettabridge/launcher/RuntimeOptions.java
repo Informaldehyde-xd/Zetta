@@ -21,11 +21,11 @@ final class RuntimeOptions {
 
     private static final String[] NAMES = {
             "jni_clear_exceptions", "normalize_rlimits", "interruptible_syscalls", "egl_force_current"};
-    private static final boolean[] DEFAULTS = {true, true, false, false};
+    private static final boolean[] DEFAULTS = {true, true, true, false};
     private static final String[] LABELS = {
             "Clear Java exceptions after game calls (fewer crashes)",
             "Give the game ordinary memory and stack limits",
-            "Let signals interrupt every waiting call (only if a freeze needs it)",
+            "Let signals interrupt every waiting call (prevents collector freezes)",
             "Force the game's graphics context before each frame (slower)"};
 
     static void show(Context context) {

@@ -34,7 +34,7 @@ inline constexpr std::uint32_t kHostReturnAddress = 0xFFFF0F00;
 int host_interrupt_signal();
 
 // Translated-code cache of one JIT. Carrier JITs only run thread start-up and parking.
-// 32 MB unless code_cache_mb=N is set in zb-options.txt.
+// 120 MB unless code_cache_mb=N is set in zb-options.txt.
 std::size_t default_code_cache_size();
 
 // The words the guest uses as locks are the targets of its atomic stores (strex, swp). The busiest

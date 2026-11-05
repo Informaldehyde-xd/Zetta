@@ -1363,7 +1363,7 @@ bool handle_syscall(Process& proc, GuestThread& thread) {
     std::optional<BlockingSection> interruptible;
     bool signalled_before_waiting = false;
     // Off unless zb-options.txt asks for it: a build without this wrapper crashes less (see options.h).
-    static const bool interruptible_syscalls = option_enabled("interruptible_syscalls", false);
+    static const bool interruptible_syscalls = option_enabled("interruptible_syscalls", true);
     if (interruptible_syscalls && syscall_may_block(nr)) {
         interruptible.emplace(thread);
         signalled_before_waiting = syscall_only_waits(nr) && has_deliverable_signal(thread);
