@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <bit>
 #include <climits>
 #include <cstring>
@@ -90,33 +91,50 @@ namespace {
 constexpr std::size_t kAtomicSlots = 512;
 std::atomic<std::uint32_t> g_atomic_address[kAtomicSlots];
 std::atomic<std::uint32_t> g_atomic_count[kAtomicSlots];
+std::atomic<std::int32_t> g_atomic_tid[kAtomicSlots];
+std::atomic<std::uint32_t> g_atomic_value[kAtomicSlots];
+std::atomic<std::uint32_t> g_atomic_ms[kAtomicSlots];
 thread_local std::uint32_t t_atomic_tick = 0;
+const std::chrono::steady_clock::time_point g_uptime_start = std::chrono::steady_clock::now();
 }  // namespace
 
-void note_atomic_store(std::uint32_t vaddr) {
-    if ((++t_atomic_tick & 7u) != 0) return;
+std::uint32_t process_uptime_ms() {
+    return static_cast<std::uint32_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - g_uptime_start).count());
+}
+
+// A word already in the table is followed on every store; a new word is only picked up on every 8th.
+void note_atomic_store(std::uint32_t vaddr, std::int32_t tid, std::uint32_t value) {
+    const bool sampled = (++t_atomic_tick & 7u) == 0;
     std::size_t slot = (vaddr >> 2) * 2654435761u % kAtomicSlots;
     for (int probe = 0; probe < 8; ++probe, slot = (slot + 1) % kAtomicSlots) {
         std::uint32_t seen = g_atomic_address[slot].load(std::memory_order_relaxed);
         if (seen == 0) {
+            if (!sampled) return;
             std::uint32_t empty = 0;
             if (g_atomic_address[slot].compare_exchange_strong(empty, vaddr)) seen = vaddr;
             else seen = empty;
         }
         if (seen == vaddr) {
             g_atomic_count[slot].fetch_add(1, std::memory_order_relaxed);
+            g_atomic_tid[slot].store(tid, std::memory_order_relaxed);
+            g_atomic_value[slot].store(value, std::memory_order_relaxed);
+            g_atomic_ms[slot].store(process_uptime_ms(), std::memory_order_relaxed);
             return;
         }
     }
 }
 
-std::vector<std::pair<std::uint32_t, std::uint32_t>> hot_atomic_words(std::size_t most) {
-    std::vector<std::pair<std::uint32_t, std::uint32_t>> all;
+std::vector<AtomicWordInfo> hot_atomic_words(std::size_t most) {
+    std::vector<AtomicWordInfo> all;
     for (std::size_t i = 0; i < kAtomicSlots; ++i) {
         const std::uint32_t address = g_atomic_address[i].load(std::memory_order_relaxed);
-        if (address != 0) all.emplace_back(address, g_atomic_count[i].load(std::memory_order_relaxed));
+        if (address == 0) continue;
+        all.push_back({address, g_atomic_count[i].load(std::memory_order_relaxed),
+                       g_atomic_tid[i].load(std::memory_order_relaxed), g_atomic_value[i].load(std::memory_order_relaxed),
+                       g_atomic_ms[i].load(std::memory_order_relaxed)});
     }
-    std::sort(all.begin(), all.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    std::sort(all.begin(), all.end(), [](const AtomicWordInfo& x, const AtomicWordInfo& y) { return x.count > y.count; });
     if (all.size() > most) all.resize(most);
     return all;
 }
@@ -407,9 +425,9 @@ bool GuestThread::MemoryWriteExclusive16(std::uint32_t vaddr, std::uint16_t valu
 }
 
 bool GuestThread::MemoryWriteExclusive32(std::uint32_t vaddr, std::uint32_t value, std::uint32_t expected) {
-    note_atomic_store(vaddr);
     if (!check_access(vaddr, 4, kPageRead | kPageWrite, true) || load<std::uint32_t>(mem_.base() + vaddr) != expected) return false;
     store(mem_.base() + vaddr, value);
+    note_atomic_store(vaddr, tid, value);
     return true;
 }
 

@@ -37,11 +37,20 @@ int host_interrupt_signal();
 // 32 MB unless code_cache_mb=N is set in zb-options.txt.
 std::size_t default_code_cache_size();
 
-// The words the guest uses as locks are the targets of its atomic stores (strex, swp). Every 8th
-// one is counted here so the freeze report can name the busiest ones; a lock left set shows up as a
-// busy word that holds 1 while every thread sleeps.
-void note_atomic_store(std::uint32_t vaddr);
-std::vector<std::pair<std::uint32_t, std::uint32_t>> hot_atomic_words(std::size_t most);  // (address, count)
+// The words the guest uses as locks are the targets of its atomic stores (strex, swp). The busiest
+// ones are counted here, with the thread that stored last and the value it stored, so the freeze
+// report can say who left a lock set: a busy word that holds 1 while every thread sleeps, and the
+// thread that stored that 1.
+struct AtomicWordInfo {
+    std::uint32_t address;
+    std::uint32_t count;
+    std::int32_t last_tid;
+    std::uint32_t last_value;
+    std::uint32_t last_ms;  // when, in ms since the process started
+};
+void note_atomic_store(std::uint32_t vaddr, std::int32_t tid, std::uint32_t value);
+std::vector<AtomicWordInfo> hot_atomic_words(std::size_t most);
+std::uint32_t process_uptime_ms();
 inline constexpr std::size_t kCarrierCodeCacheSize = 2 * 1024 * 1024;
 
 struct GuestResult {

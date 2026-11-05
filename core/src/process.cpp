@@ -661,7 +661,7 @@ bool Process::dispatch_stop(GuestThread& thread, const Stop& stop) {
                 fault.pc = stop.pc - 4;
                 return fault_or_crash(thread, fault);
             }
-            note_atomic_store(address);
+            note_atomic_store(address, thread.tid, value);
             std::uint32_t old_value = 0;
             if (byte_access) {
                 old_value = __atomic_exchange_n(target, static_cast<std::uint8_t>(value), __ATOMIC_SEQ_CST);
@@ -1446,22 +1446,31 @@ void Process::install_terminate_reporter() {
                                 if (word == 1) ones.push_back(address);
                             }
                             if (candidates.empty()) freeze += "  no value is shared by all of them\n";
-                            // The busiest atomic-store targets of the whole run, and what they hold now.
+                            // The busiest atomic-store targets of the whole run, what they hold now, and who
+                            // stored last. A lock that holds 1 while the thread that stored it is gone (or is
+                            // one of the sleepers) was left set.
                             struct HotWord {
                                 std::uint32_t address, count, word;
                                 bool in_game_library;
                             };
                             std::vector<HotWord> hot_words;
-                            freeze += "  busiest atomic words (address, uses counted, value now):\n";
-                            for (const auto& [address, count] : hot_atomic_words(10)) {
+                            freeze += "  busiest atomic words (address, uses counted, value now, last strex):\n";
+                            const std::uint32_t uptime_now = process_uptime_ms();
+                            for (const AtomicWordInfo& info : hot_atomic_words(10)) {
                                 std::uint32_t word = 0;
-                                const std::uint8_t* word_ptr = process->mem_.host_ptr(address, 4, kPageRead);
+                                const std::uint8_t* word_ptr = process->mem_.host_ptr(info.address, 4, kPageRead);
                                 if (word_ptr != nullptr) std::memcpy(&word, word_ptr, 4);
-                                const std::string where = process->describe_address(address);
+                                const std::string where = process->describe_address(info.address);
                                 const bool in_game = where.find("/sysroot/") == std::string::npos && where.find("zbhost") == std::string::npos;
-                                std::snprintf(row, sizeof row, "    %08x  %6u  holds %-9u  %s\n", address, count, word, where.c_str());
+                                bool alive = false;
+                                for (const Snapshot& snap : snapshots) alive = alive || snap.tid == info.last_tid;
+                                std::snprintf(row, sizeof row,
+                                              "    %08x  %7u  holds %-10u  %s\n      last strex: wrote %u, thread %d (%s), %.1f s ago\n",
+                                              info.address, info.count, word, where.c_str(), info.last_value, info.last_tid,
+                                              alive ? "still exists" : "GONE",
+                                              (uptime_now - info.last_ms) / 1000.0);
                                 freeze += row;
-                                hot_words.push_back({address, count, word, in_game});
+                                hot_words.push_back({info.address, info.count, word, in_game});
                             }
                             // gc_unfreeze: the lock is the busiest atomic word that is set (1 or 2) right now,
                             // outside the system libraries, while threads sleep in a retry loop.
@@ -1477,9 +1486,26 @@ void Process::install_terminate_reporter() {
                                     std::uint8_t* lock_word = process->mem_.host_ptr(pick->address, 4, kPageRead | kPageWrite);
                                     if (lock_word != nullptr) {
                                         __atomic_store_n(reinterpret_cast<std::uint32_t*>(lock_word), 0u, __ATOMIC_SEQ_CST);
-                                        std::snprintf(row, sizeof row, "  gc_unfreeze: cleared %08x (try %d)\n", pick->address, unfreeze_tries);
+                                        std::snprintf(row, sizeof row, "  gc_unfreeze: cleared %08x (try %d); checking again in 3 s\n", pick->address, unfreeze_tries);
                                         freeze += row;
                                         log("gc_unfreeze: cleared the lock word at %08x", pick->address);
+                                        // Did anything move? Count the guest's host calls over 3 s.
+                                        auto total_host_calls = []() {
+                                            std::uint64_t sum = 0;
+                                            for (std::size_t i = 0; i < kProfileSlots; ++i) sum += g_host_call_count[i].load(std::memory_order_relaxed);
+                                            return sum;
+                                        };
+                                        const std::uint64_t before = total_host_calls();
+                                        const std::uint32_t pick_address = pick->address;
+                                        process->mm_mutex().unlock();  // do not hold it while sleeping
+                                        std::this_thread::sleep_for(std::chrono::seconds(3));
+                                        process->mm_mutex().lock();
+                                        std::uint32_t after_word = 0;
+                                        if (const std::uint8_t* again = process->mem_.host_ptr(pick_address, 4, kPageRead)) std::memcpy(&after_word, again, 4);
+                                        std::snprintf(row, sizeof row, "  after 3 s: that word holds %u, host calls in 3 s: %llu%s\n", after_word,
+                                                      static_cast<unsigned long long>(total_host_calls() - before),
+                                                      total_host_calls() - before > 100 ? "  (the game MOVED again)" : "  (still frozen)");
+                                        freeze += row;
                                     }
                                 } else {
                                     freeze += "  gc_unfreeze: not done, no busy atomic word holds 1 or 2\n";
