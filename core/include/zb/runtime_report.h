@@ -18,6 +18,7 @@ namespace zb {
 // lock. RuntimeReport owns the counters so they outlive the HostJni slot table in reports.
 struct NativeCallCounter {
     std::atomic<std::uint64_t> count{0};
+    std::atomic<std::int32_t> last_tid{0};  // the host thread of the latest call (for the frame-thread profile)
 };
 
 // Diagnostics that must survive a silent :guest death. OxygenOS drops third-party logcat

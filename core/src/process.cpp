@@ -1067,6 +1067,20 @@ void Process::install_terminate_reporter() {
             unsigned long last_minor = 0, last_major = 0;
             faults_now(last_minor, last_major);
 
+            // The frame-thread profile (zb-frame.txt, every 10 s): the thread that calls nativeRender
+            // is the game's frame loop. For it: how much of the time it runs translated code, how much
+            // it is inside host calls (GL, JNI), and which waits it sits in (and the game code that
+            // called them). A game that is slow with no thread at 100% is waiting; this says on what.
+            std::unordered_map<std::string, std::uint32_t> ft_other;    // "host lib:name" / "wait in futex at ..."
+            std::unordered_map<std::uint32_t, std::uint32_t> ft_code;   // translated code, pc >> 6
+            std::uint32_t ft_samples = 0;
+            auto ft_start = clock::now();
+            std::uint64_t ft_frames_start = frame_counter.count.load(std::memory_order_relaxed);
+            auto shorten = [](const std::string& where) {
+                const std::size_t at = where.rfind("/lib/");
+                return at == std::string::npos ? where.substr(0, 90) : where.substr(at + 5, 90);
+            };
+
             // The FPS and CPU meter: zb-meter.txt, rewritten twice a second, shown by PerfMeter.java.
             // Game FPS = nativeRender calls per second. CPU = this process's user + system time.
             // meter=0 in zb-options.txt stops it.
@@ -1204,6 +1218,98 @@ void Process::install_terminate_reporter() {
                         if (std::find(process->threads_.begin(), process->threads_.end(), thread) == process->threads_.end())
                             sample_one(thread);
                     }
+
+                    // the frame thread on its own
+                    const std::int32_t frame_tid = frame_counter.last_tid.load(std::memory_order_relaxed);
+                    if (frame_tid != 0) {
+                        GuestThread* frame_thread = nullptr;
+                        for (GuestThread* t : process->threads_) if (t->tid == frame_tid) frame_thread = t;
+                        if (frame_thread == nullptr)
+                            for (GuestThread* t : process->borrowers_) if (t->tid == frame_tid) frame_thread = t;
+                        if (frame_thread != nullptr) {
+                            ++ft_samples;
+                            bool classified = false;
+                            for (const ThreadActivitySample& a : activity) {
+                                if (a.tid != frame_tid || !a.in_progress) continue;
+                                classified = true;
+                                if (a.kind == ThreadActivityKind::kHostCall) {
+                                    const auto [library, name] = host_call_name(a.id);
+                                    ++ft_other[std::string("host ") + library + ":" + name];
+                                } else {
+                                    std::string site;
+                                    const std::uint32_t sp = frame_thread->regs()[13];
+                                    const std::uint8_t* stack = process->mem_.host_ptr(sp, 512, kPageRead);
+                                    if (stack != nullptr) {
+                                        std::lock_guard<std::mutex> mm(process->mm_mutex());
+                                        int hits = 0;
+                                        for (int i = 0; i < 128 && hits < 2; ++i) {
+                                            std::uint32_t word;
+                                            std::memcpy(&word, stack + 4 * i, 4);
+                                            const std::uint32_t code = word & ~1u;
+                                            if (code < kPageSize || !process->mem_.accessible(code, 2, kPageExec)) continue;
+                                            const std::string d = process->describe_address(code);
+                                            if (d.find("/sysroot/") != std::string::npos || d.find("zbhost") != std::string::npos ||
+                                                d.find("libzbjni") != std::string::npos)
+                                                continue;
+                                            site += (hits == 0 ? " at " : " < ") + shorten(d);
+                                            ++hits;
+                                        }
+                                    }
+                                    ++ft_other[std::string("wait in ") + syscall_name(a.id) + site];
+                                }
+                                break;
+                            }
+                            if (!classified) ++ft_code[frame_thread->regs()[15] >> 6];
+                        }
+                    }
+                }
+
+                // the frame-thread profile, every 10 s
+                if (ft_samples > 0 && clock::now() - ft_start >= std::chrono::seconds(10)) {
+                    const std::uint64_t frames = frame_counter.count.load(std::memory_order_relaxed) - ft_frames_start;
+                    const double seconds_ft = std::chrono::duration<double>(clock::now() - ft_start).count();
+                    struct FtRow {
+                        std::string label;
+                        std::uint32_t samples;
+                    };
+                    std::vector<FtRow> rows;
+                    std::uint32_t code_total = 0;
+                    for (const auto& [label, count] : ft_other) rows.push_back({label, count});
+                    {
+                        std::lock_guard<std::mutex> mm(process->mm_mutex());
+                        for (const auto& [block, count] : ft_code) {
+                            code_total += count;
+                            rows.push_back({"code " + shorten(process->describe_address(block << 6)), count});
+                        }
+                    }
+                    std::sort(rows.begin(), rows.end(), [](const FtRow& a, const FtRow& b) { return a.samples > b.samples; });
+                    std::uint32_t host_total = 0, wait_total = 0;
+                    for (const auto& [label, count] : ft_other) {
+                        if (label.compare(0, 4, "host") == 0) host_total += count;
+                        else wait_total += count;
+                    }
+                    char line[300];
+                    std::string text;
+                    std::snprintf(line, sizeof line,
+                                  "frame thread %d: %llu frames in %.1f s = %.1f fps, %.0f ms per frame\n"
+                                  "  translated code %.0f%%   host calls (GL, JNI) %.0f%%   waiting %.0f%%   (%u samples of 10 ms)\n",
+                                  static_cast<int>(frame_counter.last_tid.load()), static_cast<unsigned long long>(frames), seconds_ft,
+                                  frames / seconds_ft, frames != 0 ? 1000.0 * seconds_ft / frames : 0.0,
+                                  100.0 * code_total / ft_samples, 100.0 * host_total / ft_samples, 100.0 * wait_total / ft_samples,
+                                  ft_samples);
+                    text += line;
+                    for (std::size_t r = 0; r < rows.size() && r < 12; ++r) {
+                        std::snprintf(line, sizeof line, "   %5.1f%%  ", 100.0 * rows[r].samples / ft_samples);
+                        text += line;
+                        text += rows[r].label.substr(0, 230);
+                        text += '\n';
+                    }
+                    write_text_file(external_file_path("zb-frame.txt").c_str(), text);
+                    ft_other.clear();
+                    ft_code.clear();
+                    ft_samples = 0;
+                    ft_start = clock::now();
+                    ft_frames_start = frame_counter.count.load(std::memory_order_relaxed);
                 }
 
                 // 2. did a frame finish?
