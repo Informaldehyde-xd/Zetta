@@ -7,12 +7,21 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 #include "gl/gl_diagnostics.h"
 #include "gl/host_gles1.h"
 #include "zb/gl_hostcalls.h"
 #include "zb/log.h"
 #include "zb/runtime_report.h"
+
+// Ensure GL constants are defined if not included
+#ifndef GL_RGBA
+#define GL_RGBA 0x1908
+#endif
+#ifndef GL_UNSIGNED_BYTE
+#define GL_UNSIGNED_BYTE 0x1401
+#endif
 
 namespace zb {
 
@@ -79,6 +88,84 @@ bool gl_trace_enabled() {
     return enabled;
 }
 
+// --- DXT5 DECOMPRESSOR ---
+// Decompresses a 0x83F3 (DXT5/S3TC) texture to raw RGBA8888.
+void decompress_dxt5(const std::uint8_t* data, std::uint8_t* out, int width, int height) {
+    int blocks_w = (width + 3) / 4;
+    int blocks_h = (height + 3) / 4;
+    
+    for (int by = 0; by < blocks_h; ++by) {
+        for (int bx = 0; bx < blocks_w; ++bx) {
+            const std::uint8_t* block = data + (by * blocks_w + bx) * 16;
+            
+            // --- ALPHA BLOCK (8 bytes) ---
+            std::uint8_t a0 = block[0];
+            std::uint8_t a1 = block[1];
+            std::uint8_t alpha[8];
+            alpha[0] = a0;
+            alpha[1] = a1;
+            if (a0 > a1) {
+                alpha[2] = (6 * a0 + 1 * a1) / 7;
+                alpha[3] = (5 * a0 + 2 * a1) / 7;
+                alpha[4] = (4 * a0 + 3 * a1) / 7;
+                alpha[5] = (3 * a0 + 4 * a1) / 7;
+                alpha[6] = (2 * a0 + 5 * a1) / 7;
+                alpha[7] = (1 * a0 + 6 * a1) / 7;
+            } else {
+                alpha[2] = (4 * a0 + 1 * a1) / 5;
+                alpha[3] = (3 * a0 + 2 * a1) / 5;
+                alpha[4] = (2 * a0 + 3 * a1) / 5;
+                alpha[5] = (1 * a0 + 4 * a1) / 5;
+                alpha[6] = 0;
+                alpha[7] = 255;
+            }
+            
+            std::uint64_t alpha_bits = 0;
+            for (int i = 0; i < 6; ++i) alpha_bits |= (std::uint64_t)block[2+i] << (i*8);
+            
+            // --- COLOR BLOCK (8 bytes) ---
+            std::uint16_t c0 = block[8] | (block[9] << 8);
+            std::uint16_t c1 = block[10] | (block[11] << 8);
+            std::uint32_t color_bits = block[12] | (block[13] << 8) | (block[14] << 16) | (block[15] << 24);
+            
+            std::uint8_t r[4], g[4], b[4];
+            auto unpack565 = [](std::uint16_t c, std::uint8_t& r, std::uint8_t& g, std::uint8_t& b) {
+                r = ((c >> 11) & 0x1F) << 3; r |= r >> 5;
+                g = ((c >> 5) & 0x3F) << 2; g |= g >> 6;
+                b = (c & 0x1F) << 3; b |= b >> 5;
+            };
+            unpack565(c0, r[0], g[0], b[0]);
+            unpack565(c1, r[1], g[1], b[1]);
+            
+            if (c0 > c1) {
+                r[2] = (2*r[0] + r[1]) / 3; g[2] = (2*g[0] + g[1]) / 3; b[2] = (2*b[0] + b[1]) / 3;
+                r[3] = (r[0] + 2*r[1]) / 3; g[3] = (g[0] + 2*g[1]) / 3; b[3] = (b[0] + 2*b[1]) / 3;
+            } else {
+                r[2] = (r[0] + r[1]) / 2; g[2] = (g[0] + g[1]) / 2; b[2] = (b[0] + b[1]) / 2;
+                r[3] = 0; g[3] = 0; b[3] = 0;
+            }
+            
+            for (int py = 0; py < 4; ++py) {
+                for (int px = 0; px < 4; ++px) {
+                    int x = bx * 4 + px;
+                    int y = by * 4 + py;
+                    if (x >= width || y >= height) continue;
+                    
+                    int pixel_index = py * 4 + px;
+                    int a_idx = (alpha_bits >> (pixel_index * 3)) & 0x7;
+                    int c_idx = (color_bits >> (pixel_index * 2)) & 0x3;
+                    
+                    int out_idx = (y * width + x) * 4;
+                    out[out_idx + 0] = r[c_idx];
+                    out[out_idx + 1] = g[c_idx];
+                    out[out_idx + 2] = b[c_idx];
+                    out[out_idx + 3] = alpha[a_idx];
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
 
 bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
@@ -89,9 +176,7 @@ bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
         log("GLES trace: %s(0x%x, 0x%x, 0x%x, 0x%x)", name, thread.regs()[0], thread.regs()[1],
             thread.regs()[2], thread.regs()[3]);
     }
-    // Per GL call (60,000 a second in a busy scene) a system call for the thread id and a locked update of the
-    // report are too much work for a counter: the id is read once per thread, and the calls are counted in
-    // batches. The first call is noted at once; the total in the report can lag by under 256 calls.
+    
     thread_local const std::uint64_t host_tid = static_cast<std::uint64_t>(::syscall(SYS_gettid));
     if (!gl_first_call_noted_) {
         gl_first_call_noted_ = true;
@@ -109,11 +194,37 @@ bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
         egl_context_checked_ = true;
         if (egl_context_probe_) runtime_report().note_gl_egl_context(egl_context() != 0);
     }
+    
     Call call(*this, thread, index);
+
+    // --- INTERCEPT DXT5 TEXTURES (0x83F3) ---
+    if (std::strcmp(name, "glCompressedTexImage2D") == 0) {
+        GLenum target = call.arg(0);
+        GLint level = call.arg(1);
+        GLenum internalformat = call.arg(2);
+        GLsizei width = call.arg(3);
+        GLsizei height = call.arg(4);
+        GLint border = call.arg(5);
+        GLsizei imageSize = call.arg(6);
+        std::uint32_t data_addr = call.arg(7); // Guest pointer (32-bit)
+
+        if (internalformat == 0x83F3 && data_addr != 0 && width > 0 && height > 0) {
+            const std::uint8_t* data = runtime().memory().host_ptr(data_addr, imageSize, kPageRead);
+            if (data) {
+                // Decompress to raw RGBA
+                std::vector<std::uint8_t> rgba(width * height * 4);
+                decompress_dxt5(data, rgba.data(), width, height);
+
+                // Send uncompressed RGBA to Adreno (bypasses the unsupported DXT5 format)
+                backend_.glTexImage2D(target, level, GL_RGBA, width, height, border, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+                return true;
+            }
+        }
+    }
+    // -----------------------------------------
+
     if (gl_diagnostics_enabled()) gl_diagnose_before(*this, call);
     if (dispatch(call)) {
-        // Visibility diagnostics query the driver, so they run only once the Android runtime
-        // enables them; mock-backend tests keep exact call logs.
         if (call.valid() && gl_diagnostics_enabled()) gl_diagnose(*this, call);
         if (call.valid() && std::strcmp(name, "glGetError") == 0) {
             const std::uint32_t error = thread.regs()[0];
