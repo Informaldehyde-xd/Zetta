@@ -265,6 +265,26 @@ bool HostEgl::handle_host_call(std::uint32_t index, GuestThread& thread) {
         }
     }
     Call call(*this, thread, index);
+   
+     // --- SPOOF SCREEN SIZE FOR GAMELOFT STORM ENGINE (N.O.V.A. 1) ---
+if (index == ZB_EGL_HC_eglQuerySurface) {
+    EGLint attribute = call.arg(2);
+    // EGL_WIDTH = 0x3057, EGL_HEIGHT = 0x3056
+    if (attribute == 0x3057 || attribute == 0x3056) {
+        std::uint32_t guest_ptr = call.arg(3);
+        if (guest_ptr != 0) {
+            std::uint32_t* host_ptr = reinterpret_cast<std::uint32_t*>(
+                runtime_.memory().host_ptr(guest_ptr, 4, kPageWrite));
+            if (host_ptr) {
+                // Force 1280x720 (standard 16:9 resolution)
+                *host_ptr = (attribute == 0x3057) ? 1280 : 720;
+                thread.regs()[0] = 1; // Return EGL_TRUE
+                return true; // Skip the actual host driver call
+            }
+        }
+    }
+}
+// ---------------------------------------------------------------
     if (dispatch(call)) {
         if (index == ZB_EGL_HC_eglCreateContext && thread.regs()[0] != 0) {
             g_last_context_handle.store(thread.regs()[0], std::memory_order_relaxed);
