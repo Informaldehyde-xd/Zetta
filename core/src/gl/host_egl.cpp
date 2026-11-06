@@ -268,6 +268,7 @@ bool HostEgl::handle_host_call(std::uint32_t index, GuestThread& thread) {
     Call call(*this, thread, index);
    // --- CONDITIONAL GAMELOFT STORM ENGINE SCREEN SPOOF ---
 // Only runs if "spoof_gameloft_res=1" is in zb-options.txt
+// --- CONDITIONAL GAMELOFT STORM ENGINE SCREEN SPOOF ---
 static const bool spoof_gameloft = option_enabled("spoof_gameloft_res", false);
 
 if (spoof_gameloft) {
@@ -290,13 +291,14 @@ if (spoof_gameloft) {
 
     // 2. Force the physical Android window buffer to 1280x720
     if (index == ZB_EGL_HC_eglCreateWindowSurface) {
-        std::uint32_t win = call.arg(2);
-        if (win != 0) {
+        // FIXED: Use handle_of instead of private resolve_handle
+        const void* win = call.handle_of(2, EglObject::Surface); 
+        if (win != nullptr) {
             static auto set_buffers_geometry = reinterpret_cast<int(*)(void*, int, int, int)>(
                 dlsym(RTLD_DEFAULT, "ANativeWindow_setBuffersGeometry"));
             if (set_buffers_geometry) {
                 // 1 = WINDOW_FORMAT_RGBA_8888
-                set_buffers_geometry(reinterpret_cast<void*>(win), 1280, 720, 1);
+                set_buffers_geometry(const_cast<void*>(win), 1280, 720, 1);
             }
         }
     }

@@ -1253,8 +1253,8 @@ void Process::install_terminate_reporter() {
                     GuestThread* frame_thread = find_thread(frame_tid);
                     frame_found_by_native = frame_thread != nullptr;
                     if (frame_thread == nullptr) frame_thread = find_thread(fallback_tid);
-                    if (frame_thread == nullptr && fallback_tid == 0 && clock::now() - fallback_checked >= std::chrono::seconds(1)) {
-                        fallback_checked = clock::now();  // look for a thread named UnityMain, outside the lock
+                    if (!frame_found_by_native && clock::now() - fallback_checked >= std::chrono::seconds(5)) {
+                        fallback_checked = clock::now();  // look for the busiest thread named UnityMain, outside the lock
                         for (GuestThread* t : process->threads_) scan_tids.push_back(t->tid);
                         for (GuestThread* t : process->borrowers_) scan_tids.push_back(t->tid);
                     }
@@ -1279,8 +1279,23 @@ void Process::install_terminate_reporter() {
                 }
 
                 // finish the frame-thread sample with the thread list unlocked
-                for (std::int32_t tid : scan_tids) {
-                    if (thread_comm_is(tid, "UnityMain")) fallback_tid = tid;
+                // Several threads are named UnityMain (job threads wait, the frame loop works): take the one that
+                // has used the most CPU time.
+                {
+                    unsigned long best_ticks = 0;
+                    std::int32_t best_tid = 0;
+                    for (std::int32_t tid : scan_tids) {
+                        if (!thread_comm_is(tid, "UnityMain")) continue;
+                        char path[64];
+                        std::snprintf(path, sizeof path, "/proc/self/task/%d/stat", static_cast<int>(tid));
+                        unsigned long ticks = 0;
+                        read_ticks(path, ticks, nullptr);
+                        if (best_tid == 0 || ticks >= best_ticks) {
+                            best_ticks = ticks;
+                            best_tid = tid;
+                        }
+                    }
+                    if (best_tid != 0) fallback_tid = best_tid;
                 }
                 if (fs.valid) {
                     ++ft_samples;
