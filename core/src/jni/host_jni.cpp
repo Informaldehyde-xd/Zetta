@@ -554,12 +554,14 @@ std::optional<HostJni::NativeResult> HostJni::call_native(JniBackend::Env env, c
     // The single funnel for every Java -> guest native invocation: one relaxed atomic add per
     // call, no lock, no string work. call_counter is null for calls that are not dispatching a
     // bound native method (the loader's own JNI_OnLoad call), which are not counted.
-    if (call_counter != nullptr) {
-        call_counter->count.fetch_add(1, std::memory_order_relaxed);
-        call_counter->last_tid.store(static_cast<std::int32_t>(syscall(SYS_gettid)), std::memory_order_relaxed);
-    }
+    if (call_counter != nullptr) call_counter->count.fetch_add(1, std::memory_order_relaxed);
     Impl& jni = *impl_;
     JniThread& state = jni.thread();
+    // A Java thread runs its guest natives on a carrier, a guest thread with its own id; the frame
+    // profiler needs that id (it exists from the first call on).
+    if (call_counter != nullptr && state.carrier) {
+        call_counter->last_tid.store(state.carrier->guest_tid(), std::memory_order_relaxed);
+    }
     const JniBackend::Env outer_env = state.env;
     if (outer_env != 0 && outer_env != env) {
         log("JNI native call with a JNIEnv that differs from this thread's JNIEnv");
@@ -579,6 +581,9 @@ std::optional<HostJni::NativeResult> HostJni::call_native(JniBackend::Env env, c
     const GuestCall args =
         build(state.guest_env, [&](std::uint64_t ref) { return state.locals.add(ref); });
     std::optional<GuestResult> guest = jni.invoke(state, function, args);
+    if (call_counter != nullptr && state.carrier) {
+        call_counter->last_tid.store(state.carrier->guest_tid(), std::memory_order_relaxed);
+    }
 
     // The one guest -> host sync point of the direct-buffer mirrors (host_jni_data.cpp): whatever
     // the guest wrote into a mirrored Java buffer becomes visible to Java here, when the native

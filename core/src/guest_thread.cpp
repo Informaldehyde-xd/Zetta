@@ -34,17 +34,21 @@ constexpr Dynarmic::HaltReason kInterruptHalt = Dynarmic::HaltReason::UserDefine
 // returns with PC set to the accessing instruction, so faults are precise.
 constexpr Dynarmic::HaltReason kMemoryAbortHalt = Dynarmic::HaltReason::MemoryAbort;
 
-// Speed experiments, switched on from a text file so that each one can be tried without a rebuild:
-// <external files dir>/zb-tuning.txt, one "name=1" per line. Nothing is on unless the file says so.
-//   little_endian=1    the guest never uses SETEND, so every load and store can skip the byte-order check
-//   fp_standard=1      NEON arithmetic runs with the host's floating-point state instead of switching
-//                      to the ARM "standard FPSCR" for every operation (the one most likely to help)
-//   fp_estimate=1      reciprocal and square-root estimates may be more exact than ARM's
-//   fp_fma=1           fused multiply-add is split into a multiply and an add
-//   fp_nan=1           floating-point results may not have the exact NaN ARM would produce
-//   fast_fp=1          fp_standard + fp_estimate + fp_fma (not fp_nan, which broke loading)
-//                      Results can differ in the last bits, which games rarely notice.
-//   fast_exclusive=1   ldrex/strex (atomics, locks) use the direct memory pointer
+// Speed switches, set from a text file so that each one can be tried without a rebuild:
+// <external files dir>/zb-tuning.txt, one "name=1" or "name=0" per line. A name that is not in the
+// file has its default, given here.
+//   little_endian  (default ON)   the guest never uses SETEND, so every load and store can skip the
+//                                 byte-order check
+//   fast_fp        (default ON)   fp_standard + fp_estimate + fp_fma below. A Unity 5 game ran at 15 fps
+//                                 with little_endian and fast_fp and at 6-9 fps without them.
+//                                 Results can differ in the last bits, which games rarely notice.
+//   fp_standard    (default off)  NEON arithmetic runs with the host's floating-point state instead of
+//                                 switching to the ARM "standard FPSCR" for every operation
+//   fp_estimate    (default off)  reciprocal and square-root estimates may be more exact than ARM's
+//   fp_fma         (default off)  fused multiply-add is split into a multiply and an add
+//   fp_nan         (default off)  results may not have the exact NaN ARM would produce (broke loading)
+//   fast_exclusive (default off)  ldrex/strex (atomics, locks) use the direct memory pointer
+// To switch a default off for a game that misbehaves: "fast_fp=0" and "little_endian=0".
 // The file is read once; a change needs a new start of the game.
 // zb-tuning.txt lives in the launcher's external files folder (zb::external_file_path)
 
@@ -59,14 +63,30 @@ bool tuning(const char* name) {
         }
         return content;
     }();
-    const std::string wanted = std::string(name) + "=1";
-    for (std::size_t at = text.find(wanted); at != std::string::npos; at = text.find(wanted, at + 1)) {
-        const bool line_start = at == 0 || text[at - 1] == '\n';
-        const std::size_t end = at + wanted.size();
-        const bool line_end = end == text.size() || text[end] == '\n' || text[end] == '\r' || text[end] == ' ';
-        if (line_start && line_end) return true;
+    auto has_line = [&](const std::string& wanted) {
+        for (std::size_t at = text.find(wanted); at != std::string::npos; at = text.find(wanted, at + 1)) {
+            const bool line_start = at == 0 || text[at - 1] == '\n';
+            const std::size_t end = at + wanted.size();
+            const bool line_end = end == text.size() || text[end] == '\n' || text[end] == '\r' || text[end] == ' ';
+            if (line_start && line_end) return true;
+        }
+        return false;
+    };
+    bool value;
+    if (has_line(std::string(name) + "=0")) value = false;
+    else if (has_line(std::string(name) + "=1")) value = true;
+    else value = std::strcmp(name, "little_endian") == 0 || std::strcmp(name, "fast_fp") == 0;
+    // show what is active in the runtime report (one entry per switch, in the order they are first asked for)
+    static std::mutex note_mutex;
+    static std::string active;
+    {
+        std::lock_guard<std::mutex> lock(note_mutex);
+        if (active.find(std::string(name) + "=") == std::string::npos) {
+            active += std::string(active.empty() ? "" : " ") + name + "=" + (value ? "1" : "0");
+            runtime_report().note_jni_detail("tuning", active, true);
+        }
     }
-    return false;
+    return value;
 }
 
 constexpr std::uint32_t kCpsrThumb = 0x20;
