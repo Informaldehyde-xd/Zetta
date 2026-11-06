@@ -1198,6 +1198,15 @@ void Process::install_terminate_reporter() {
 
                 // 1. what is every busy thread doing right now
                 const std::vector<ThreadActivitySample> activity = snapshot_thread_activity();
+                struct FrameSample {
+                    bool valid = false;
+                    int kind = 0;  // 0 translated code, 1 host call, 2 syscall
+                    std::int32_t tid = 0;
+                    std::uint32_t id = 0, pc = 0;
+                    std::uint32_t stack[128];
+                    bool has_stack = false;
+                } fs;
+                std::vector<std::int32_t> scan_tids;
                 {
                     std::lock_guard<std::mutex> lock(process->threads_mutex_);
                     auto sample_one = [&](GuestThread* thread) {
@@ -1231,68 +1240,72 @@ void Process::install_terminate_reporter() {
                             sample_one(thread);
                     }
 
-                    // the frame thread on its own
+                    // The frame thread: while the thread list is locked only raw data is copied. Naming
+                    // addresses (which takes the memory-map lock) is done after the unlock below; taking
+                    // both locks together deadlocked the game at start.
                     const std::int32_t frame_tid = frame_counter.last_tid.load(std::memory_order_relaxed);
-                    if (frame_tid != 0) {
-                        GuestThread* frame_thread = nullptr;
-                        for (GuestThread* t : process->threads_) if (t->tid == frame_tid) frame_thread = t;
-                        if (frame_thread == nullptr)
-                            for (GuestThread* t : process->borrowers_) if (t->tid == frame_tid) frame_thread = t;
-                        frame_found_by_native = frame_thread != nullptr;
+                    auto find_thread = [&](std::int32_t tid) -> GuestThread* {
+                        if (tid == 0) return nullptr;
+                        for (GuestThread* t : process->threads_) if (t->tid == tid) return t;
+                        for (GuestThread* t : process->borrowers_) if (t->tid == tid) return t;
+                        return nullptr;
+                    };
+                    GuestThread* frame_thread = find_thread(frame_tid);
+                    frame_found_by_native = frame_thread != nullptr;
+                    if (frame_thread == nullptr) frame_thread = find_thread(fallback_tid);
+                    if (frame_thread == nullptr && fallback_tid == 0 && clock::now() - fallback_checked >= std::chrono::seconds(1)) {
+                        fallback_checked = clock::now();  // look for a thread named UnityMain, outside the lock
+                        for (GuestThread* t : process->threads_) scan_tids.push_back(t->tid);
+                        for (GuestThread* t : process->borrowers_) scan_tids.push_back(t->tid);
                     }
-                    if (!frame_found_by_native) {
-                        // Some games run their frame loop on a thread whose id the nativeRender call does not
-                        // give us; look for a thread named UnityMain (checked once a second).
-                        const auto now_check = clock::now();
-                        if (fallback_tid == 0 && now_check - fallback_checked >= std::chrono::seconds(1)) {
-                            fallback_checked = now_check;
-                            for (GuestThread* t : process->threads_) if (thread_comm_is(t->tid, "UnityMain")) fallback_tid = t->tid;
-                            for (GuestThread* t : process->borrowers_) if (thread_comm_is(t->tid, "UnityMain")) fallback_tid = t->tid;
-                        }
-                    }
-                    {
-                        const std::int32_t sample_tid = frame_found_by_native ? frame_tid : fallback_tid;
-                        GuestThread* frame_thread = nullptr;
-                        if (sample_tid != 0) {
-                            for (GuestThread* t : process->threads_) if (t->tid == sample_tid) frame_thread = t;
-                            if (frame_thread == nullptr)
-                                for (GuestThread* t : process->borrowers_) if (t->tid == sample_tid) frame_thread = t;
-                        }
-                        if (frame_thread != nullptr) {
-                            ++ft_samples;
-                            bool classified = false;
-                            for (const ThreadActivitySample& a : activity) {
-                                if (a.tid != sample_tid || !a.in_progress) continue;
-                                classified = true;
-                                if (a.kind == ThreadActivityKind::kHostCall) {
-                                    const auto [library, name] = host_call_name(a.id);
-                                    ++ft_other[std::string("host ") + library + ":" + name];
-                                } else {
-                                    std::string site;
-                                    const std::uint32_t sp = frame_thread->regs()[13];
-                                    const std::uint8_t* stack = process->mem_.host_ptr(sp, 512, kPageRead);
-                                    if (stack != nullptr) {
-                                        std::lock_guard<std::mutex> mm(process->mm_mutex());
-                                        int hits = 0;
-                                        for (int i = 0; i < 128 && hits < 2; ++i) {
-                                            std::uint32_t word;
-                                            std::memcpy(&word, stack + 4 * i, 4);
-                                            const std::uint32_t code = word & ~1u;
-                                            if (code < kPageSize || !process->mem_.accessible(code, 2, kPageExec)) continue;
-                                            const std::string d = process->describe_address(code);
-                                            if (d.find("/sysroot/") != std::string::npos || d.find("zbhost") != std::string::npos ||
-                                                d.find("libzbjni") != std::string::npos)
-                                                continue;
-                                            site += (hits == 0 ? " at " : " < ") + shorten(d);
-                                            ++hits;
-                                        }
-                                    }
-                                    ++ft_other[std::string("wait in ") + syscall_name(a.id) + site];
+                    if (frame_thread != nullptr) {
+                        fs.valid = true;
+                        fs.tid = frame_thread->tid;
+                        fs.pc = frame_thread->regs()[15];
+                        const std::uint32_t sp = frame_thread->regs()[13];
+                        for (const ThreadActivitySample& a : activity) {
+                            if (a.tid != fs.tid || !a.in_progress) continue;
+                            fs.kind = a.kind == ThreadActivityKind::kHostCall ? 1 : 2;
+                            fs.id = a.id;
+                            if (fs.kind == 2) {
+                                if (const std::uint8_t* stack = process->mem_.host_ptr(sp, sizeof fs.stack, kPageRead)) {
+                                    std::memcpy(fs.stack, stack, sizeof fs.stack);
+                                    fs.has_stack = true;
                                 }
-                                break;
                             }
-                            if (!classified) ++ft_code[frame_thread->regs()[15] >> 6];
+                            break;
                         }
+                    }
+                }
+
+                // finish the frame-thread sample with the thread list unlocked
+                for (std::int32_t tid : scan_tids) {
+                    if (thread_comm_is(tid, "UnityMain")) fallback_tid = tid;
+                }
+                if (fs.valid) {
+                    ++ft_samples;
+                    if (fs.kind == 0) {
+                        ++ft_code[fs.pc >> 6];
+                    } else if (fs.kind == 1) {
+                        const auto [library, name] = host_call_name(fs.id);
+                        ++ft_other[std::string("host ") + library + ":" + name];
+                    } else {
+                        std::string site;
+                        if (fs.has_stack) {
+                            std::lock_guard<std::mutex> mm(process->mm_mutex());
+                            int hits = 0;
+                            for (int i = 0; i < 128 && hits < 2; ++i) {
+                                const std::uint32_t code = fs.stack[i] & ~1u;
+                                if (code < kPageSize || !process->mem_.accessible(code, 2, kPageExec)) continue;
+                                const std::string d = process->describe_address(code);
+                                if (d.find("/sysroot/") != std::string::npos || d.find("zbhost") != std::string::npos ||
+                                    d.find("libzbjni") != std::string::npos)
+                                    continue;
+                                site += (hits == 0 ? " at " : " < ") + shorten(d);
+                                ++hits;
+                            }
+                        }
+                        ++ft_other[std::string("wait in ") + syscall_name(fs.id) + site];
                     }
                 }
 
