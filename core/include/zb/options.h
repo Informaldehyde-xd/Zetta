@@ -33,10 +33,9 @@ namespace zb {
 //                                        set for good (a mid-game freeze with the video stopped).
 //   meter                   (default 1)  Debug build only: write zb-meter.txt (FPS, slowest frame, CPU, RAM,
 //                                        busiest threads) twice a second for the on-screen readout.
-//   malloc_keep_memory      (default 1)  Tell the guest's allocator not to give freed memory back to the
-//                                        system on a timer (mallopt M_DECAY_TIME 1). Cuts the page
-//                                        faults and CPU that loading screens spent re-touching it.
-//                                        Uses more RAM while the game runs.
+//   malloc_keep_memory      (default 0)  Experiment: tell the guest's allocator not to give freed memory back
+//                                        to the system on a timer (mallopt M_DECAY_TIME 1). A Rope Hero
+//                                        test showed no drop in page faults, so it is off.
 bool option_enabled(const char* name, bool default_value);
 // A whole-number setting from the same file ("name=96"); the default when it is missing or not a number.
 int option_number(const char* name, int default_value);

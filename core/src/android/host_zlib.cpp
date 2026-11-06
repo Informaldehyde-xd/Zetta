@@ -51,7 +51,7 @@ bool HostZlib::handle_host_call(std::uint32_t index, GuestThread& thread) {
     }
 
     if (index == ZB_ZLIB_HC_MALLOC_PROBE) {
-        static const bool keep = option_enabled("malloc_keep_memory", true);
+        static const bool keep = option_enabled("malloc_keep_memory", false);
         static bool announced = false;
         if (!announced) {
             announced = true;
