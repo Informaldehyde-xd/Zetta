@@ -178,6 +178,8 @@ uLong adler32(uLong adler, const Bytef* buf, uInt len) {
  * game then touches it again: a loading screen of one game showed 1.1 million page faults in 9
  * seconds. mallopt(M_DECAY_TIME, 1) switches the automatic release to its least eager setting.
  * Switch: malloc_keep_memory=0 in zb-options.txt. */
+
+extern int mallopt(int __op, int __value);
 #ifndef M_DECAY_TIME
 #define M_DECAY_TIME (-100)
 #endif

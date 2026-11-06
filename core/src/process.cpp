@@ -1076,6 +1076,18 @@ void Process::install_terminate_reporter() {
             std::uint32_t ft_samples = 0;
             auto ft_start = clock::now();
             std::uint64_t ft_frames_start = frame_counter.count.load(std::memory_order_relaxed);
+            std::int32_t fallback_tid = 0;           // a thread named UnityMain, when nativeRender's thread is not found
+            auto fallback_checked = clock::now();
+            bool frame_found_by_native = false;
+            auto thread_comm_is = [](std::int32_t tid, const char* wanted) {
+                char path[64], name[64] = "";
+                std::snprintf(path, sizeof path, "/proc/self/task/%d/comm", static_cast<int>(tid));
+                if (std::FILE* comm = std::fopen(path, "re")) {
+                    if (std::fgets(name, sizeof name, comm) != nullptr) name[std::strcspn(name, "\n")] = 0;
+                    std::fclose(comm);
+                }
+                return std::strcmp(name, wanted) == 0;
+            };
             auto shorten = [](const std::string& where) {
                 const std::size_t at = where.rfind("/lib/");
                 return at == std::string::npos ? where.substr(0, 90) : where.substr(at + 5, 90);
@@ -1226,11 +1238,31 @@ void Process::install_terminate_reporter() {
                         for (GuestThread* t : process->threads_) if (t->tid == frame_tid) frame_thread = t;
                         if (frame_thread == nullptr)
                             for (GuestThread* t : process->borrowers_) if (t->tid == frame_tid) frame_thread = t;
+                        frame_found_by_native = frame_thread != nullptr;
+                    }
+                    if (!frame_found_by_native) {
+                        // Some games run their frame loop on a thread whose id the nativeRender call does not
+                        // give us; look for a thread named UnityMain (checked once a second).
+                        const auto now_check = clock::now();
+                        if (fallback_tid == 0 && now_check - fallback_checked >= std::chrono::seconds(1)) {
+                            fallback_checked = now_check;
+                            for (GuestThread* t : process->threads_) if (thread_comm_is(t->tid, "UnityMain")) fallback_tid = t->tid;
+                            for (GuestThread* t : process->borrowers_) if (thread_comm_is(t->tid, "UnityMain")) fallback_tid = t->tid;
+                        }
+                    }
+                    {
+                        const std::int32_t sample_tid = frame_found_by_native ? frame_tid : fallback_tid;
+                        GuestThread* frame_thread = nullptr;
+                        if (sample_tid != 0) {
+                            for (GuestThread* t : process->threads_) if (t->tid == sample_tid) frame_thread = t;
+                            if (frame_thread == nullptr)
+                                for (GuestThread* t : process->borrowers_) if (t->tid == sample_tid) frame_thread = t;
+                        }
                         if (frame_thread != nullptr) {
                             ++ft_samples;
                             bool classified = false;
                             for (const ThreadActivitySample& a : activity) {
-                                if (a.tid != frame_tid || !a.in_progress) continue;
+                                if (a.tid != sample_tid || !a.in_progress) continue;
                                 classified = true;
                                 if (a.kind == ThreadActivityKind::kHostCall) {
                                     const auto [library, name] = host_call_name(a.id);
@@ -1265,7 +1297,7 @@ void Process::install_terminate_reporter() {
                 }
 
                 // the frame-thread profile, every 10 s
-                if (ft_samples > 0 && clock::now() - ft_start >= std::chrono::seconds(10)) {
+                if (clock::now() - ft_start >= std::chrono::seconds(10)) {
                     const std::uint64_t frames = frame_counter.count.load(std::memory_order_relaxed) - ft_frames_start;
                     const double seconds_ft = std::chrono::duration<double>(clock::now() - ft_start).count();
                     struct FtRow {
@@ -1290,16 +1322,19 @@ void Process::install_terminate_reporter() {
                     }
                     char line[300];
                     std::string text;
+                    const double total_samples = ft_samples != 0 ? static_cast<double>(ft_samples) : 1.0;
                     std::snprintf(line, sizeof line,
-                                  "frame thread %d: %llu frames in %.1f s = %.1f fps, %.0f ms per frame\n"
-                                  "  translated code %.0f%%   host calls (GL, JNI) %.0f%%   waiting %.0f%%   (%u samples of 10 ms)\n",
-                                  static_cast<int>(frame_counter.last_tid.load()), static_cast<unsigned long long>(frames), seconds_ft,
+                                  "status: nativeRender thread %d (%s), thread named UnityMain %d; %u samples this window\n"
+                                  "frame loop: %llu frames in %.1f s = %.1f fps, %.0f ms per frame\n"
+                                  "  translated code %.0f%%   host calls (GL, JNI) %.0f%%   waiting %.0f%%   (samples are 10 ms each)\n",
+                                  static_cast<int>(frame_counter.last_tid.load()), frame_found_by_native ? "found" : "NOT FOUND",
+                                  static_cast<int>(fallback_tid), ft_samples, static_cast<unsigned long long>(frames), seconds_ft,
                                   frames / seconds_ft, frames != 0 ? 1000.0 * seconds_ft / frames : 0.0,
-                                  100.0 * code_total / ft_samples, 100.0 * host_total / ft_samples, 100.0 * wait_total / ft_samples,
-                                  ft_samples);
+                                  100.0 * code_total / total_samples, 100.0 * host_total / total_samples,
+                                  100.0 * wait_total / total_samples);
                     text += line;
                     for (std::size_t r = 0; r < rows.size() && r < 12; ++r) {
-                        std::snprintf(line, sizeof line, "   %5.1f%%  ", 100.0 * rows[r].samples / ft_samples);
+                        std::snprintf(line, sizeof line, "   %5.1f%%  ", 100.0 * rows[r].samples / total_samples);
                         text += line;
                         text += rows[r].label.substr(0, 230);
                         text += '\n';
