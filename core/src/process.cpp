@@ -1067,18 +1067,23 @@ void Process::install_terminate_reporter() {
             unsigned long last_minor = 0, last_major = 0;
             faults_now(last_minor, last_major);
 
-            // The frame-thread profile (zb-frame.txt, every 10 s): the thread that calls nativeRender
-            // is the game's frame loop. For it: how much of the time it runs translated code, how much
-            // it is inside host calls (GL, JNI), and which waits it sits in (and the game code that
-            // called them). A game that is slow with no thread at 100% is waiting; this says on what.
-            std::unordered_map<std::string, std::uint32_t> ft_other;    // "host lib:name" / "wait in futex at ..."
-            std::unordered_map<std::uint32_t, std::uint32_t> ft_code;   // translated code, pc >> 6
-            std::uint32_t ft_samples = 0;
+            // The frame profile (zb-frame.txt, every 10 s). Two threads are followed: the thread that
+            // calls nativeRender (the whole frame runs there in Unity 3.5, on its GL thread) and the
+            // busiest thread named UnityMain (Unity 4 and 5 run the frame loop there; nativeRender only
+            // hands a frame over). For each: how much of the time it runs translated code, how much it
+            // is inside host calls (GL, JNI), and which waits it sits in (and the game code that called them).
+            struct FtState {
+                explicit FtState(const char* name) : label(name) {}
+                const char* label;
+                std::int32_t tid = 0;
+                std::uint32_t samples = 0;
+                std::unordered_map<std::string, std::uint32_t> other;   // "host lib:name" / "wait in futex at ..."
+                std::unordered_map<std::uint32_t, std::uint32_t> code;  // translated code, pc >> 6
+            };
+            FtState ft[2] = {FtState("thread that calls nativeRender"), FtState("busiest thread named UnityMain")};
             auto ft_start = clock::now();
             std::uint64_t ft_frames_start = frame_counter.count.load(std::memory_order_relaxed);
-            std::int32_t fallback_tid = 0;           // a thread named UnityMain, when nativeRender's thread is not found
             auto fallback_checked = clock::now();
-            bool frame_found_by_native = false;
             auto thread_comm_is = [](std::int32_t tid, const char* wanted) {
                 char path[64], name[64] = "";
                 std::snprintf(path, sizeof path, "/proc/self/task/%d/comm", static_cast<int>(tid));
@@ -1205,7 +1210,7 @@ void Process::install_terminate_reporter() {
                     std::uint32_t id = 0, pc = 0;
                     std::uint32_t stack[128];
                     bool has_stack = false;
-                } fs;
+                } fs[2];
                 std::vector<std::int32_t> scan_tids;
                 {
                     std::lock_guard<std::mutex> lock(process->threads_mutex_);
@@ -1240,37 +1245,37 @@ void Process::install_terminate_reporter() {
                             sample_one(thread);
                     }
 
-                    // The frame thread: while the thread list is locked only raw data is copied. Naming
-                    // addresses (which takes the memory-map lock) is done after the unlock below; taking
-                    // both locks together deadlocked the game at start.
-                    const std::int32_t frame_tid = frame_counter.last_tid.load(std::memory_order_relaxed);
+                    // The two followed threads: while the thread list is locked only raw data is copied.
+                    // Naming addresses (which takes the memory-map lock) is done after the unlock below;
+                    // taking both locks together deadlocked the game at start.
+                    ft[0].tid = frame_counter.last_tid.load(std::memory_order_relaxed);
                     auto find_thread = [&](std::int32_t tid) -> GuestThread* {
                         if (tid == 0) return nullptr;
                         for (GuestThread* t : process->threads_) if (t->tid == tid) return t;
                         for (GuestThread* t : process->borrowers_) if (t->tid == tid) return t;
                         return nullptr;
                     };
-                    GuestThread* frame_thread = find_thread(frame_tid);
-                    frame_found_by_native = frame_thread != nullptr;
-                    if (frame_thread == nullptr) frame_thread = find_thread(fallback_tid);
-                    if (!frame_found_by_native && clock::now() - fallback_checked >= std::chrono::seconds(5)) {
-                        fallback_checked = clock::now();  // look for the busiest thread named UnityMain, outside the lock
+                    if (clock::now() - fallback_checked >= std::chrono::seconds(5)) {
+                        fallback_checked = clock::now();  // look for the busiest UnityMain, outside the lock
                         for (GuestThread* t : process->threads_) scan_tids.push_back(t->tid);
                         for (GuestThread* t : process->borrowers_) scan_tids.push_back(t->tid);
                     }
-                    if (frame_thread != nullptr) {
-                        fs.valid = true;
-                        fs.tid = frame_thread->tid;
-                        fs.pc = frame_thread->regs()[15];
-                        const std::uint32_t sp = frame_thread->regs()[13];
+                    for (int k = 0; k < 2; ++k) {
+                        GuestThread* t = find_thread(ft[k].tid);
+                        if (t == nullptr) continue;
+                        FrameSample& f = fs[k];
+                        f.valid = true;
+                        f.tid = t->tid;
+                        f.pc = t->regs()[15];
+                        const std::uint32_t sp = t->regs()[13];
                         for (const ThreadActivitySample& a : activity) {
-                            if (a.tid != fs.tid || !a.in_progress) continue;
-                            fs.kind = a.kind == ThreadActivityKind::kHostCall ? 1 : 2;
-                            fs.id = a.id;
-                            if (fs.kind == 2) {
-                                if (const std::uint8_t* stack = process->mem_.host_ptr(sp, sizeof fs.stack, kPageRead)) {
-                                    std::memcpy(fs.stack, stack, sizeof fs.stack);
-                                    fs.has_stack = true;
+                            if (a.tid != f.tid || !a.in_progress) continue;
+                            f.kind = a.kind == ThreadActivityKind::kHostCall ? 1 : 2;
+                            f.id = a.id;
+                            if (f.kind == 2) {
+                                if (const std::uint8_t* stack = process->mem_.host_ptr(sp, sizeof f.stack, kPageRead)) {
+                                    std::memcpy(f.stack, stack, sizeof f.stack);
+                                    f.has_stack = true;
                                 }
                             }
                             break;
@@ -1278,10 +1283,10 @@ void Process::install_terminate_reporter() {
                     }
                 }
 
-                // finish the frame-thread sample with the thread list unlocked
-                // Several threads are named UnityMain (job threads wait, the frame loop works): take the one that
-                // has used the most CPU time.
+                // finish the frame samples with the thread list unlocked
                 {
+                    // Several threads are named UnityMain (job threads wait, the frame loop works): take the
+                    // one that has used the most CPU time.
                     unsigned long best_ticks = 0;
                     std::int32_t best_tid = 0;
                     for (std::int32_t tid : scan_tids) {
@@ -1295,22 +1300,25 @@ void Process::install_terminate_reporter() {
                             best_tid = tid;
                         }
                     }
-                    if (best_tid != 0) fallback_tid = best_tid;
+                    if (best_tid != 0) ft[1].tid = best_tid;
                 }
-                if (fs.valid) {
-                    ++ft_samples;
-                    if (fs.kind == 0) {
-                        ++ft_code[fs.pc >> 6];
-                    } else if (fs.kind == 1) {
-                        const auto [library, name] = host_call_name(fs.id);
-                        ++ft_other[std::string("host ") + library + ":" + name];
+                for (int k = 0; k < 2; ++k) {
+                    const FrameSample& f = fs[k];
+                    if (!f.valid) continue;
+                    FtState& state = ft[k];
+                    ++state.samples;
+                    if (f.kind == 0) {
+                        ++state.code[f.pc >> 6];
+                    } else if (f.kind == 1) {
+                        const auto [library, name] = host_call_name(f.id);
+                        ++state.other[std::string("host ") + library + ":" + name];
                     } else {
                         std::string site;
-                        if (fs.has_stack) {
+                        if (f.has_stack) {
                             std::lock_guard<std::mutex> mm(process->mm_mutex());
                             int hits = 0;
                             for (int i = 0; i < 128 && hits < 2; ++i) {
-                                const std::uint32_t code = fs.stack[i] & ~1u;
+                                const std::uint32_t code = f.stack[i] & ~1u;
                                 if (code < kPageSize || !process->mem_.accessible(code, 2, kPageExec)) continue;
                                 const std::string d = process->describe_address(code);
                                 if (d.find("/sysroot/") != std::string::npos || d.find("zbhost") != std::string::npos ||
@@ -1320,57 +1328,59 @@ void Process::install_terminate_reporter() {
                                 ++hits;
                             }
                         }
-                        ++ft_other[std::string("wait in ") + syscall_name(fs.id) + site];
+                        ++state.other[std::string("wait in ") + syscall_name(f.id) + site];
                     }
                 }
 
-                // the frame-thread profile, every 10 s
+                // the frame profile, every 10 s
                 if (clock::now() - ft_start >= std::chrono::seconds(10)) {
                     const std::uint64_t frames = frame_counter.count.load(std::memory_order_relaxed) - ft_frames_start;
                     const double seconds_ft = std::chrono::duration<double>(clock::now() - ft_start).count();
-                    struct FtRow {
-                        std::string label;
-                        std::uint32_t samples;
-                    };
-                    std::vector<FtRow> rows;
-                    std::uint32_t code_total = 0;
-                    for (const auto& [label, count] : ft_other) rows.push_back({label, count});
-                    {
-                        std::lock_guard<std::mutex> mm(process->mm_mutex());
-                        for (const auto& [block, count] : ft_code) {
-                            code_total += count;
-                            rows.push_back({"code " + shorten(process->describe_address(block << 6)), count});
-                        }
-                    }
-                    std::sort(rows.begin(), rows.end(), [](const FtRow& a, const FtRow& b) { return a.samples > b.samples; });
-                    std::uint32_t host_total = 0, wait_total = 0;
-                    for (const auto& [label, count] : ft_other) {
-                        if (label.compare(0, 4, "host") == 0) host_total += count;
-                        else wait_total += count;
-                    }
                     char line[300];
                     std::string text;
-                    const double total_samples = ft_samples != 0 ? static_cast<double>(ft_samples) : 1.0;
-                    std::snprintf(line, sizeof line,
-                                  "status: nativeRender thread %d (%s), thread named UnityMain %d; %u samples this window\n"
-                                  "frame loop: %llu frames in %.1f s = %.1f fps, %.0f ms per frame\n"
-                                  "  translated code %.0f%%   host calls (GL, JNI) %.0f%%   waiting %.0f%%   (samples are 10 ms each)\n",
-                                  static_cast<int>(frame_counter.last_tid.load()), frame_found_by_native ? "found" : "NOT FOUND",
-                                  static_cast<int>(fallback_tid), ft_samples, static_cast<unsigned long long>(frames), seconds_ft,
-                                  frames / seconds_ft, frames != 0 ? 1000.0 * seconds_ft / frames : 0.0,
-                                  100.0 * code_total / total_samples, 100.0 * host_total / total_samples,
-                                  100.0 * wait_total / total_samples);
+                    std::snprintf(line, sizeof line, "nativeRender: %llu frames in %.1f s = %.1f fps, %.0f ms per frame\n",
+                                  static_cast<unsigned long long>(frames), seconds_ft, frames / seconds_ft,
+                                  frames != 0 ? 1000.0 * seconds_ft / frames : 0.0);
                     text += line;
-                    for (std::size_t r = 0; r < rows.size() && r < 12; ++r) {
-                        std::snprintf(line, sizeof line, "   %5.1f%%  ", 100.0 * rows[r].samples / total_samples);
+                    for (int k = 0; k < 2; ++k) {
+                        FtState& state = ft[k];
+                        struct FtRow {
+                            std::string label;
+                            std::uint32_t samples;
+                        };
+                        std::vector<FtRow> rows;
+                        std::uint32_t code_total = 0, host_total = 0, wait_total = 0;
+                        for (const auto& [label, count] : state.other) {
+                            rows.push_back({label, count});
+                            if (label.compare(0, 4, "host") == 0) host_total += count;
+                            else wait_total += count;
+                        }
+                        {
+                            std::lock_guard<std::mutex> mm(process->mm_mutex());
+                            for (const auto& [block, count] : state.code) {
+                                code_total += count;
+                                rows.push_back({"code " + shorten(process->describe_address(block << 6)), count});
+                            }
+                        }
+                        std::sort(rows.begin(), rows.end(), [](const FtRow& a, const FtRow& b) { return a.samples > b.samples; });
+                        const double total_samples = state.samples != 0 ? static_cast<double>(state.samples) : 1.0;
+                        std::snprintf(line, sizeof line,
+                                      "\n%s (thread %d, %u samples of 10 ms):\n"
+                                      "  translated code %.0f%%   host calls (GL, JNI) %.0f%%   waiting %.0f%%\n",
+                                      state.label, static_cast<int>(state.tid), state.samples, 100.0 * code_total / total_samples,
+                                      100.0 * host_total / total_samples, 100.0 * wait_total / total_samples);
                         text += line;
-                        text += rows[r].label.substr(0, 230);
-                        text += '\n';
+                        for (std::size_t r = 0; r < rows.size() && r < 10; ++r) {
+                            std::snprintf(line, sizeof line, "   %5.1f%%  ", 100.0 * rows[r].samples / total_samples);
+                            text += line;
+                            text += rows[r].label.substr(0, 230);
+                            text += '\n';
+                        }
+                        state.other.clear();
+                        state.code.clear();
+                        state.samples = 0;
                     }
                     write_text_file(external_file_path("zb-frame.txt").c_str(), text);
-                    ft_other.clear();
-                    ft_code.clear();
-                    ft_samples = 0;
                     ft_start = clock::now();
                     ft_frames_start = frame_counter.count.load(std::memory_order_relaxed);
                 }
