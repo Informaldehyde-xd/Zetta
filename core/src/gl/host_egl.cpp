@@ -3,6 +3,7 @@
 
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <dlfcn.h>
 
 #include <atomic>
 #include <cstdint>
@@ -265,26 +266,42 @@ bool HostEgl::handle_host_call(std::uint32_t index, GuestThread& thread) {
         }
     }
     Call call(*this, thread, index);
-   
-     // --- SPOOF SCREEN SIZE FOR GAMELOFT STORM ENGINE (N.O.V.A. 1) ---
-if (index == ZB_EGL_HC_eglQuerySurface) {
-    EGLint attribute = call.arg(2);
-    // EGL_WIDTH = 0x3057, EGL_HEIGHT = 0x3056
-    if (attribute == 0x3057 || attribute == 0x3056) {
-        std::uint32_t guest_ptr = call.arg(3);
-        if (guest_ptr != 0) {
-            std::uint32_t* host_ptr = reinterpret_cast<std::uint32_t*>(
-                runtime_.memory().host_ptr(guest_ptr, 4, kPageWrite));
-            if (host_ptr) {
-                // Force 1280x720 (standard 16:9 resolution)
-                *host_ptr = (attribute == 0x3057) ? 1280 : 720;
-                thread.regs()[0] = 1; // Return EGL_TRUE
-                return true; // Skip the actual host driver call
+   // --- CONDITIONAL GAMELOFT STORM ENGINE SCREEN SPOOF ---
+// Only runs if "spoof_gameloft_res=1" is in zb-options.txt
+static const bool spoof_gameloft = option_enabled("spoof_gameloft_res", false);
+
+if (spoof_gameloft) {
+    // 1. Spoof what the engine THINKS the screen size is
+    if (index == ZB_EGL_HC_eglQuerySurface) {
+        EGLint attribute = call.arg(2);
+        if (attribute == 0x3057 || attribute == 0x3056) { // EGL_WIDTH / EGL_HEIGHT
+            std::uint32_t guest_ptr = call.arg(3);
+            if (guest_ptr != 0) {
+                std::uint32_t* host_ptr = reinterpret_cast<std::uint32_t*>(
+                    runtime_.memory().host_ptr(guest_ptr, 4, kPageWrite));
+                if (host_ptr) {
+                    *host_ptr = (attribute == 0x3057) ? 1280 : 720;
+                    thread.regs()[0] = 1; // EGL_TRUE
+                    return true; 
+                }
+            }
+        }
+    }
+
+    // 2. Force the physical Android window buffer to 1280x720
+    if (index == ZB_EGL_HC_eglCreateWindowSurface) {
+        std::uint32_t win = call.arg(2);
+        if (win != 0) {
+            static auto set_buffers_geometry = reinterpret_cast<int(*)(void*, int, int, int)>(
+                dlsym(RTLD_DEFAULT, "ANativeWindow_setBuffersGeometry"));
+            if (set_buffers_geometry) {
+                // 1 = WINDOW_FORMAT_RGBA_8888
+                set_buffers_geometry(reinterpret_cast<void*>(win), 1280, 720, 1);
             }
         }
     }
 }
-// ---------------------------------------------------------------
+// -----------------------------------------------------
     if (dispatch(call)) {
         if (index == ZB_EGL_HC_eglCreateContext && thread.regs()[0] != 0) {
             g_last_context_handle.store(thread.regs()[0], std::memory_order_relaxed);
