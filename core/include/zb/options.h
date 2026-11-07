@@ -36,6 +36,9 @@ namespace zb {
 //   malloc_keep_memory      (default 0)  Experiment: tell the guest's allocator not to give freed memory back
 //                                        to the system on a timer (mallopt M_DECAY_TIME 1). A Rope Hero
 //                                        test showed no drop in page faults, so it is off.
+//   perf_hint               (default 1)  Tell Android (PerformanceHint API, Android 13+) which of the game's
+//                                        threads are working flat out, so it can give them a faster core
+//                                        and clock. Uses a little more power. Does nothing without the API.
 bool option_enabled(const char* name, bool default_value);
 // A whole-number setting from the same file ("name=96"); the default when it is missing or not a number.
 int option_number(const char* name, int default_value);

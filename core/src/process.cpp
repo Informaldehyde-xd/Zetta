@@ -43,6 +43,7 @@
 #include "zb/diagnostics.h"
 #include "zb/external_dir.h"
 #include "zb/options.h"
+#include "zb/perf_hint.h"
 #include "zb/runtime_report.h"
 #include "zb/syscalls.h"
 
@@ -815,6 +816,7 @@ void Process::install_terminate_reporter() {
     // One guest process has one Process, and it outlives everything: the handler needs it only to
     // name the library an address belongs to.
     reporter_process = this;
+    start_perf_hint();  // asks Android to speed up the hot threads (Android 13 and later)
     std::call_once(once, [] {
         previous = std::set_terminate([] {
             if (GuestThread* thread = Process::current_thread()) {
@@ -1067,10 +1069,17 @@ void Process::install_terminate_reporter() {
             unsigned long last_minor = 0, last_major = 0;
             faults_now(last_minor, last_major);
 
+            struct MeterBusy {
+                double percent;
+                std::int32_t tid;
+                std::string name;
+            };
+            std::vector<MeterBusy> meter_busy;  // threads that used CPU in the last half second, busiest first
+            std::vector<std::string> ft_history;  // the last report windows in which the game was drawing frames
             // The frame profile (zb-frame.txt, every 10 s). Two threads are followed: the thread that
             // calls nativeRender (the whole frame runs there in Unity 3.5, on its GL thread) and the
-            // busiest thread named UnityMain (Unity 4 and 5 run the frame loop there; nativeRender only
-            // hands a frame over). For each: how much of the time it runs translated code, how much it
+            // busiest guest thread by CPU use, leaving out the sound threads (Unity 4 and 5 run the
+            // frame loop on a thread of their own; nativeRender only hands a frame over). For each: how much of the time it runs translated code, how much it
             // is inside host calls (GL, JNI), and which waits it sits in (and the game code that called them).
             struct FtState {
                 explicit FtState(const char* name) : label(name) {}
@@ -1080,19 +1089,9 @@ void Process::install_terminate_reporter() {
                 std::unordered_map<std::string, std::uint32_t> other;   // "host lib:name" / "wait in futex at ..."
                 std::unordered_map<std::uint32_t, std::uint32_t> code;  // translated code, pc >> 6
             };
-            FtState ft[2] = {FtState("thread that calls nativeRender"), FtState("busiest thread named UnityMain")};
+            FtState ft[2] = {FtState("thread that calls nativeRender"), FtState("busiest guest thread by CPU (not FMOD)")};
             auto ft_start = clock::now();
             std::uint64_t ft_frames_start = frame_counter.count.load(std::memory_order_relaxed);
-            auto fallback_checked = clock::now();
-            auto thread_comm_is = [](std::int32_t tid, const char* wanted) {
-                char path[64], name[64] = "";
-                std::snprintf(path, sizeof path, "/proc/self/task/%d/comm", static_cast<int>(tid));
-                if (std::FILE* comm = std::fopen(path, "re")) {
-                    if (std::fgets(name, sizeof name, comm) != nullptr) name[std::strcspn(name, "\n")] = 0;
-                    std::fclose(comm);
-                }
-                return std::strcmp(name, wanted) == 0;
-            };
             auto shorten = [](const std::string& where) {
                 const std::size_t at = where.rfind("/lib/");
                 return at == std::string::npos ? where.substr(0, 90) : where.substr(at + 5, 90);
@@ -1157,6 +1156,7 @@ void Process::install_terminate_reporter() {
                                            (static_cast<double>(clock_ticks) * meter_seconds);
                         // the busiest threads over this stretch
                         std::vector<std::pair<double, std::string>> busy;
+                        meter_busy.clear();
                         if (DIR* dir = opendir("/proc/self/task")) {
                             while (dirent* entry = readdir(dir)) {
                                 const int tid = std::atoi(entry->d_name);
@@ -1170,11 +1170,15 @@ void Process::install_terminate_reporter() {
                                 meter_last_thread_ticks[tid] = ticks;
                                 const double percent = 100.0 * (ticks - std::min(ticks, before)) /
                                                        (static_cast<double>(clock_ticks) * meter_seconds);
-                                if (percent >= 3.0) busy.emplace_back(percent, name);
+                                if (percent >= 3.0) {
+                                    busy.emplace_back(percent, name);
+                                    meter_busy.push_back({percent, tid, name});
+                                }
                             }
                             closedir(dir);
                         }
                         std::sort(busy.begin(), busy.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+                        std::sort(meter_busy.begin(), meter_busy.end(), [](const MeterBusy& a, const MeterBusy& b) { return a.percent > b.percent; });
                         unsigned long ram_pages = 0;
                         if (std::FILE* statm = std::fopen("/proc/self/statm", "re")) {
                             unsigned long size_pages = 0;
@@ -1211,7 +1215,6 @@ void Process::install_terminate_reporter() {
                     std::uint32_t stack[128];
                     bool has_stack = false;
                 } fs[2];
-                std::vector<std::int32_t> scan_tids;
                 {
                     std::lock_guard<std::mutex> lock(process->threads_mutex_);
                     auto sample_one = [&](GuestThread* thread) {
@@ -1255,10 +1258,15 @@ void Process::install_terminate_reporter() {
                         for (GuestThread* t : process->borrowers_) if (t->tid == tid) return t;
                         return nullptr;
                     };
-                    if (clock::now() - fallback_checked >= std::chrono::seconds(5)) {
-                        fallback_checked = clock::now();  // look for the busiest UnityMain, outside the lock
-                        for (GuestThread* t : process->threads_) scan_tids.push_back(t->tid);
-                        for (GuestThread* t : process->borrowers_) scan_tids.push_back(t->tid);
+                    // the busiest guest thread by CPU (the meter list is refreshed twice a second); a thread
+                    // that is not a guest thread (the Java UI thread) is skipped, so is the sound mixer
+                    ft[1].tid = 0;
+                    for (const MeterBusy& candidate : meter_busy) {
+                        if (candidate.name.compare(0, 4, "FMOD") == 0) continue;
+                        if (find_thread(candidate.tid) != nullptr) {
+                            ft[1].tid = candidate.tid;
+                            break;
+                        }
                     }
                     for (int k = 0; k < 2; ++k) {
                         GuestThread* t = find_thread(ft[k].tid);
@@ -1284,24 +1292,6 @@ void Process::install_terminate_reporter() {
                 }
 
                 // finish the frame samples with the thread list unlocked
-                {
-                    // Several threads are named UnityMain (job threads wait, the frame loop works): take the
-                    // one that has used the most CPU time.
-                    unsigned long best_ticks = 0;
-                    std::int32_t best_tid = 0;
-                    for (std::int32_t tid : scan_tids) {
-                        if (!thread_comm_is(tid, "UnityMain")) continue;
-                        char path[64];
-                        std::snprintf(path, sizeof path, "/proc/self/task/%d/stat", static_cast<int>(tid));
-                        unsigned long ticks = 0;
-                        read_ticks(path, ticks, nullptr);
-                        if (best_tid == 0 || ticks >= best_ticks) {
-                            best_ticks = ticks;
-                            best_tid = tid;
-                        }
-                    }
-                    if (best_tid != 0) ft[1].tid = best_tid;
-                }
                 for (int k = 0; k < 2; ++k) {
                     const FrameSample& f = fs[k];
                     if (!f.valid) continue;
@@ -1380,7 +1370,17 @@ void Process::install_terminate_reporter() {
                         state.code.clear();
                         state.samples = 0;
                     }
-                    write_text_file(external_file_path("zb-frame.txt").c_str(), text);
+                    // only windows in which frames were drawn are kept (the last 6), so an idle moment at the end
+                    // (a pause, a menu) does not replace the useful ones
+                    if (frames >= 3) {
+                        ft_history.push_back("---- window at " + std::to_string(static_cast<long>(process_uptime_ms() / 1000)) +
+                                             " s of the run ----\n" + text);
+                        if (ft_history.size() > 6) ft_history.erase(ft_history.begin());
+                    }
+                    std::string all_text;
+                    for (const std::string& window : ft_history) all_text += window + "\n";
+                    if (ft_history.empty()) all_text = text;
+                    write_text_file(external_file_path("zb-frame.txt").c_str(), all_text);
                     ft_start = clock::now();
                     ft_frames_start = frame_counter.count.load(std::memory_order_relaxed);
                 }
