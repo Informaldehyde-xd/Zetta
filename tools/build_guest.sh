@@ -89,7 +89,7 @@ done
     -o "$OUT/lib/libzblooperprobe.so" "$ROOT/guest/testlib/zblooperprobe.c" \
     -L"$OUT/lib" -landroid
 
-"$CC" -shared -marm -O2 -Wall -I"$ROOT/core/include" -Wl,-soname,libzbcompat.so -o "$OUT/lib/libzbcompat.so" "$ROOT/guest/compat/zbcompat.c" "$ROOT/guest/compat/zbzlib.c" -ldl
+"$CC" -shared -marm -O2 -fno-builtin -Wall -I"$ROOT/core/include" -Wl,-soname,libzbcompat.so -o "$OUT/lib/libzbcompat.so" "$ROOT/guest/compat/zbcompat.c" "$ROOT/guest/compat/zbzlib.c" "$ROOT/guest/compat/zbmem.c" -ldl
 
 # EGL/window probe for egl_chain_test (Phase 7a Task 9). Built as a shared library so
 # LibraryRuntime can dlopen it and call its "main" symbol directly, the same way the

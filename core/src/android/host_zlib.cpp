@@ -2,7 +2,9 @@
 
 #include <zlib.h>
 
+#include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -12,6 +14,7 @@
 #include "zb/library_runtime.h"
 #include "zb/log.h"
 #include "zb/options.h"
+#include "zb/runtime_report.h"
 #include "zb/zlib_protocol.h"
 
 namespace zb {
@@ -47,6 +50,46 @@ bool HostZlib::handle_host_call(std::uint32_t index, GuestThread& thread) {
             log("native zlib is %s", native_enabled() ? "ON" : "OFF (native_zlib=0)");
         }
         regs[0] = native_enabled() ? 1u : 0u;
+        return true;
+    }
+
+    if (index == ZB_MEM_HC_PROBE) {
+        // Copies and fills of at least this many bytes run as native code. Below it the translated libc is as
+        // fast as the host call. 0 switches it off (native_mem_min=0 in zb-options.txt).
+        static const int minimum = option_number("native_mem_min", 16384);
+        regs[0] = minimum > 0 ? static_cast<std::uint32_t>(minimum) : 0u;
+        return true;
+    }
+    if (index == ZB_MEM_HC_COPY || index == ZB_MEM_HC_SET) {
+        static std::atomic<std::uint64_t> copies{0}, sets{0}, bytes{0};
+        const std::uint32_t destination = regs[0];
+        const std::uint32_t length = regs[2];
+        std::uint8_t* to = memory.host_ptr(destination, length, kPageWrite);
+        if (index == ZB_MEM_HC_COPY) {
+            const std::uint8_t* from = memory.host_ptr(regs[1], length, kPageRead);
+            if (to == nullptr || from == nullptr) {  // a bad pointer: the guest's own copy will fault in the right place
+                regs[0] = 0;
+                return true;
+            }
+            std::memmove(to, from, length);
+            copies.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            if (to == nullptr) {
+                regs[0] = 0;
+                return true;
+            }
+            std::memset(to, static_cast<int>(regs[1] & 0xFF), length);
+            sets.fetch_add(1, std::memory_order_relaxed);
+        }
+        const std::uint64_t total = bytes.fetch_add(length, std::memory_order_relaxed) + length;
+        const std::uint64_t calls = copies.load(std::memory_order_relaxed) + sets.load(std::memory_order_relaxed);
+        if ((calls & 1023) == 1) {  // shows in the runtime report, and proves the guest really uses it
+            char text[160];
+            std::snprintf(text, sizeof text, "%llu copies, %llu fills, %llu MB done natively", static_cast<unsigned long long>(copies.load()),
+                          static_cast<unsigned long long>(sets.load()), static_cast<unsigned long long>(total >> 20));
+            runtime_report().note_jni_detail("native-mem", text, true);
+        }
+        regs[0] = 1;
         return true;
     }
 
@@ -190,6 +233,14 @@ bool HostZlib::handle_host_call(std::uint32_t index, GuestThread& thread) {
     }
 
     // ZB_ZLIB_HC_INFLATE
+    {
+        static std::atomic<std::uint64_t> inflate_calls{0};
+        if ((inflate_calls.fetch_add(1, std::memory_order_relaxed) & 4095) == 0) {
+            char text[80];
+            std::snprintf(text, sizeof text, "%llu inflate calls so far", static_cast<unsigned long long>(inflate_calls.load()));
+            runtime_report().note_jni_detail("native-zlib", text, true);
+        }
+    }
     std::uint8_t* in = nullptr;
     std::uint8_t* out = nullptr;
     if (call.avail_in != 0) {

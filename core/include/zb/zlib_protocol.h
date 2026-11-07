@@ -14,7 +14,10 @@
 #define ZB_ZLIB_HC_UNCOMPRESS 707    /* r0 = dest, r1 = &destLen, r2 = src, r3 = srcLen */
 #define ZB_ZLIB_HC_PROBE 708         /* r0 = 1 when native zlib is switched on, else 0 */
 #define ZB_ZLIB_HC_MALLOC_PROBE 709  /* r0 = 1 when the allocator should keep freed memory, else 0 */
-#define ZB_ZLIB_HC_LAST 709
+#define ZB_MEM_HC_COPY 710            /* r0 = dest, r1 = src, r2 = n; r0 = 1 when done natively, 0 when not */
+#define ZB_MEM_HC_SET 711             /* r0 = dest, r1 = byte, r2 = n; r0 = 1 when done natively, 0 when not */
+#define ZB_MEM_HC_PROBE 712           /* r0 = smallest size done natively (0 = switched off) */
+#define ZB_ZLIB_HC_LAST 712
 
 #define ZB_ZLIB_MAGIC 0x425A5A4Eu
 
