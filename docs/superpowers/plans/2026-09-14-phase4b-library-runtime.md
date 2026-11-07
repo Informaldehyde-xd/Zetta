@@ -90,7 +90,7 @@ code was prototyped in the worktree, built, and tested before being written here
 | `tools/build_guest.sh`, `tools/gen_stubs.py`, `core/CMakeLists.txt`, `tests/host/CMakeLists.txt` | build wiring and index reservation |
 
 Commands are one line and run from the repository root of the Phase 4b worktree
-(`/home/Zailox/ZettaBridge/.worktrees/phase4b-library-runtime`). Every task ends with:
+(`/home/Zailox/IX32PSL/.worktrees/phase4b-library-runtime`). Every task ends with:
 
 ```sh
 tools/build_guest.sh; ninja -C build/host; ctest --test-dir build/host --output-on-failure

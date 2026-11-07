@@ -1,4 +1,4 @@
-// ZettaBridge launcher. Generated native/runtime inputs come only from build/launcher.
+// IX32PSL launcher. Generated native/runtime inputs come only from build/launcher.
 // Plain Java, UI built in code, no AndroidX.
 import java.io.File
 import java.util.Properties
@@ -7,11 +7,11 @@ plugins {
     id("com.android.application")
 }
 
-// The release key lives outside the repository: ~/.zettabridge/signing.properties names the
+// The release key lives outside the repository: ~/.ix32psl/signing.properties names the
 // keystore and its passwords. Without that file the release build stays unsigned, so a clone
 // without the key still builds.
 val signingProps = Properties()
-val signingPropsFile = File(System.getProperty("user.home"), ".zettabridge/signing.properties")
+val signingPropsFile = File(System.getProperty("user.home"), ".ix32psl/signing.properties")
 if (signingPropsFile.isFile) {
     signingPropsFile.inputStream().use { stream -> signingProps.load(stream) }
 }
@@ -19,11 +19,11 @@ val releaseKeystore: File? = signingProps.getProperty("storeFile")?.let { path -
 val hasReleaseKey = releaseKeystore != null && releaseKeystore.isFile
 
 android {
-    namespace = "com.zettabridge.launcher"
+    namespace = "com.ix32psl.launcher"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.zettabridge.launcher"
+        applicationId = "com.ix32psl.launcher"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

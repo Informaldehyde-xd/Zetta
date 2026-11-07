@@ -1,7 +1,7 @@
 # Phase 0: launcher shell (plugin skeleton, no translation)
 
 Project: `android/launcher/` (AGP 8.7.3, Gradle 8.11.1, compileSdk 35, minSdk 26, targetSdk 35,
-plain Java, UI built in code, no AndroidX). Phone copy: `/sdcard/AndroidIDEProjects/ZettaBridge`.
+plain Java, UI built in code, no AndroidX). Phone copy: `/sdcard/AndroidIDEProjects/IX32PSL`.
 
 Acceptance: a normal **arm64** game launches from a pinned shortcut, renders and takes touch input,
 while running as a plugin inside the launcher's `:guest` process. Nothing is installed.
@@ -85,7 +85,7 @@ real framework does all the work:
 - **A hand-driven proxy Activity that calls the plugin's lifecycle methods.** Many plugin classes
   (window, fragments, GL surfaces) break when not attached by the framework.
 
-**Stub pool** (all in `:guest`, affinity `com.zettabridge.launcher.guest`, hardware accelerated,
+**Stub pool** (all in `:guest`, affinity `com.ix32psl.launcher.guest`, hardware accelerated,
 broad `configChanges`):
 - `Stubs$Standard`, `$Landscape` and `$Portrait` (by the plugin's `screenOrientation`);
 - `$SingleTop`, `$SingleTask`, `$SingleInstance` (by `launchMode`).
@@ -142,13 +142,13 @@ reflection.
 
 ## Device test
 
-1. Open `/sdcard/AndroidIDEProjects/ZettaBridge` in AndroidIDE, build and install. The launcher
-   icon is labelled "ZettaBridge".
+1. Open `/sdcard/AndroidIDEProjects/IX32PSL` in AndroidIDE, build and install. The launcher
+   icon is labelled "IX32PSL".
 2. Get a simple free **arm64** game as a single APK (not a split bundle). The choice is yours;
    start with a simple offline 2D game (GLSurfaceView or Unity without Play Services). Check with
    `unzip -l game.apk | grep lib/`: `lib/arm64-v8a/` must be present and there must be no
    `config.*.apk` splits.
-3. In ZettaBridge tap **Import APK** and pick the file. The row should show `arm64: ready`.
+3. In IX32PSL tap **Import APK** and pick the file. The row should show `arm64: ready`.
 4. Tap the row: the game should start. Check that it renders and responds to touch.
 5. Long-press the row -> **Pin shortcut** -> confirm on the home screen. Close the game, launch it
    from the shortcut, check again that it renders and takes touch input. That is the Phase 0

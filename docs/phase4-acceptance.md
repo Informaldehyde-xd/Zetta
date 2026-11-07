@@ -29,8 +29,8 @@ first.
 ## Report
 
 ```text
-zettabridge-runtime-report 1
-plugin: /data/data/com.zettabridge.launcher/files/plugins/com.heyhouser.OrangeRoulette targetSdk 16
+ix32psl-runtime-report 1
+plugin: /data/data/com.ix32psl.launcher/files/plugins/com.heyhouser.OrangeRoulette targetSdk 16
 proxy-loads: 6
 proxy-failures: 0
 proxy-loaded: libstd.so jni=0x00010006

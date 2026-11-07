@@ -8,7 +8,7 @@ plugins {
 }
 
 val signingProps = Properties()
-val signingPropsFile = File(System.getProperty("user.home"), ".zettabridge/signing.properties")
+val signingPropsFile = File(System.getProperty("user.home"), ".ix32psl/signing.properties")
 if (signingPropsFile.isFile) {
     signingPropsFile.inputStream().use { stream -> signingProps.load(stream) }
 }
@@ -16,11 +16,11 @@ val releaseKeystore: File? = signingProps.getProperty("storeFile")?.let { path -
 val hasReleaseKey = releaseKeystore != null && releaseKeystore.isFile
 
 android {
-    namespace = "com.zettabridge.t6"
+    namespace = "com.ix32psl.t6"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.zettabridge.t6"
+        applicationId = "com.ix32psl.t6"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

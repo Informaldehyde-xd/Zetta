@@ -80,7 +80,7 @@ constructs a `Dynarmic::ExclusiveMonitor(1)` and prints `zbrun ok`),
 - [ ] Top-level CMake:
 ```cmake
 cmake_minimum_required(VERSION 3.22)
-project(zettabridge LANGUAGES C CXX)
+project(ix32psl LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(DYNARMIC_FRONTENDS "A32" CACHE STRING "" FORCE)

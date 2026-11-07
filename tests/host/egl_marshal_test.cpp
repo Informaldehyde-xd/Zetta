@@ -161,12 +161,12 @@ int main() {
     CHECK(call_egl(zb::ZB_EGL_HC_eglGetProcAddress, {other_name}) == 0);
 
     // eglQueryString copies into guest memory and caches one copy per (display, name).
-    backend.set_string(kEglVendor, "ZettaBridge");
+    backend.set_string(kEglVendor, "IX32PSL");
     const std::uint32_t vendor = call_egl(zb::ZB_EGL_HC_eglQueryString,
                                           {display, static_cast<std::uint32_t>(kEglVendor)});
     CHECK(vendor >= kData && vendor < kData + 0x1000);
     CHECK(std::strcmp(reinterpret_cast<const char*>(runtime.memory().base() + vendor),
-                      "ZettaBridge") == 0);
+                      "IX32PSL") == 0);
     CHECK(call_egl(zb::ZB_EGL_HC_eglQueryString,
                    {display, static_cast<std::uint32_t>(kEglVendor)}) == vendor);
 

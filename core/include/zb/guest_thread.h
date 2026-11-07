@@ -55,6 +55,13 @@ struct AtomicWordInfo {
 void note_atomic_store(std::uint32_t vaddr, std::int32_t tid, std::uint32_t value, std::uint32_t old_value);
 std::vector<AtomicWordInfo> hot_atomic_words(std::size_t most);
 std::uint32_t process_uptime_ms();
+
+// Which 4 KB pages of the guest's memory have ever had an instruction fetched from them (that is, the
+// translator may hold translated code for them). Memory-map calls (mmap, munmap, mprotect, brk) on a
+// range with no such page need not touch any thread's code cache; most of them are heap and texture
+// memory, and each one used to cost every thread's translator an invalidation.
+void note_code_page(std::uint32_t vaddr);
+bool code_in_range(std::uint32_t addr, std::uint32_t len);
 inline constexpr std::size_t kCarrierCodeCacheSize = 2 * 1024 * 1024;
 
 struct GuestResult {

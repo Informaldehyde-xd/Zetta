@@ -17,7 +17,7 @@ import struct
 import sys
 
 ALLOWED_NEEDED = {"libc.so", "libdl.so", "liblog.so"}
-REQUIRED_STRINGS = [b"com/zettabridge/core/ZBridge", b"onProxyLoaded", b"(Ljava/lang/String;)I"]
+REQUIRED_STRINGS = [b"com/ix32psl/core/ZBridge", b"onProxyLoaded", b"(Ljava/lang/String;)I"]
 
 EM_AARCH64 = 183
 ET_DYN = 3

@@ -1,4 +1,4 @@
-// JNI entry points of libzbridge.so for com.zettabridge.core.ZBridge.
+// JNI entry points of libzbridge.so for com.ix32psl.core.ZBridge.
 #include <jni.h>
 
 #include <cstdlib>
@@ -75,7 +75,7 @@ extern "C" {
 
 // static native int runExecutable(String sysroot, String[] argv, String[] envp)
 // Blocks until the guest exits. envp == null passes the app process environment.
-JNIEXPORT jint JNICALL Java_com_zettabridge_core_ZBridge_runExecutable(JNIEnv* env, jclass, jstring sysroot,
+JNIEXPORT jint JNICALL Java_com_ix32psl_core_ZBridge_runExecutable(JNIEnv* env, jclass, jstring sysroot,
                                                                       jobjectArray argv, jobjectArray envp) {
     std::string sysroot_path;
     if (sysroot != nullptr) {
@@ -103,7 +103,7 @@ JNIEXPORT jint JNICALL Java_com_zettabridge_core_ZBridge_runExecutable(JNIEnv* e
 
 // static native void activatePlugin(String pluginRoot, int targetSdk, ClassLoader classLoader)
 // Throws IllegalStateException with the reason.
-JNIEXPORT void JNICALL Java_com_zettabridge_core_ZBridge_activatePlugin(JNIEnv* env, jclass, jstring plugin_root,
+JNIEXPORT void JNICALL Java_com_ix32psl_core_ZBridge_activatePlugin(JNIEnv* env, jclass, jstring plugin_root,
                                                                        jint target_sdk, jobject class_loader) {
     const std::optional<std::string> root = to_string(env, plugin_root);
     if (!root) {
@@ -120,17 +120,17 @@ JNIEXPORT void JNICALL Java_com_zettabridge_core_ZBridge_activatePlugin(JNIEnv* 
             static_cast<zb::JniBackend::Ref>(reinterpret_cast<std::uintptr_t>(class_loader)), error)) {
         zb::log("ZBridge.activatePlugin: %s", error.c_str());
         if (env->ExceptionCheck()) env->ExceptionClear();
-        throw_new(env, "java/lang/IllegalStateException", "ZettaBridge cannot activate plugin: " + error);
+        throw_new(env, "java/lang/IllegalStateException", "IX32PSL cannot activate plugin: " + error);
     }
 }
 
 // static native int onProxyLoaded(String proxyPath), called by libzbproxy.so's JNI_OnLoad.
 // Returns the guest JNI version or throws UnsatisfiedLinkError with the full detail, which also
 // stays available through loadError/lastLoadError because ART replaces it.
-JNIEXPORT jint JNICALL Java_com_zettabridge_core_ZBridge_onProxyLoaded(JNIEnv* env, jclass, jstring proxy_path) {
+JNIEXPORT jint JNICALL Java_com_ix32psl_core_ZBridge_onProxyLoaded(JNIEnv* env, jclass, jstring proxy_path) {
     const std::optional<std::string> path = to_string(env, proxy_path);
     if (!path) {
-        throw_new(env, "java/lang/UnsatisfiedLinkError", "ZettaBridge: null proxy path");
+        throw_new(env, "java/lang/UnsatisfiedLinkError", "IX32PSL: null proxy path");
         return JNI_ERR;
     }
     const zb::ProxyLoadResult result = zb::GuestJniRuntime::get(env).proxies().on_proxy_loaded(to_env(env), *path);
@@ -144,7 +144,7 @@ JNIEXPORT jint JNICALL Java_com_zettabridge_core_ZBridge_onProxyLoaded(JNIEnv* e
 // Called by libzbproxy.so from ANativeActivity_onCreate. Never throws: the framework is in the
 // middle of creating an activity, and an exception here would surface somewhere unrelated. A
 // refusal is false, with the reason in the runtime report.
-JNIEXPORT jboolean JNICALL Java_com_zettabridge_core_ZBridge_onNativeActivityCreated(
+JNIEXPORT jboolean JNICALL Java_com_ix32psl_core_ZBridge_onNativeActivityCreated(
     JNIEnv* env, jclass, jlong activity, jlong saved_state, jlong saved_state_size, jstring proxy_path) {
     const std::optional<std::string> path = to_string(env, proxy_path);
     if (!path) return JNI_FALSE;
@@ -156,7 +156,7 @@ JNIEXPORT jboolean JNICALL Java_com_zettabridge_core_ZBridge_onNativeActivityCre
 }
 
 // static native String loadError(String proxyPath): the stored failure of that proxy, or null.
-JNIEXPORT jstring JNICALL Java_com_zettabridge_core_ZBridge_loadError(JNIEnv* env, jclass, jstring proxy_path) {
+JNIEXPORT jstring JNICALL Java_com_ix32psl_core_ZBridge_loadError(JNIEnv* env, jclass, jstring proxy_path) {
     const std::optional<std::string> path = to_string(env, proxy_path);
     zb::GuestJniRuntime* runtime = zb::GuestJniRuntime::peek();
     if (!path || runtime == nullptr) return nullptr;
@@ -164,7 +164,7 @@ JNIEXPORT jstring JNICALL Java_com_zettabridge_core_ZBridge_loadError(JNIEnv* en
 }
 
 // static native String lastLoadError(): the most recent proxy load failure, or null.
-JNIEXPORT jstring JNICALL Java_com_zettabridge_core_ZBridge_lastLoadError(JNIEnv* env, jclass) {
+JNIEXPORT jstring JNICALL Java_com_ix32psl_core_ZBridge_lastLoadError(JNIEnv* env, jclass) {
     zb::GuestJniRuntime* runtime = zb::GuestJniRuntime::peek();
     return runtime != nullptr ? optional_string(env, runtime->proxies().last_load_error()) : nullptr;
 }
@@ -173,7 +173,7 @@ JNIEXPORT jstring JNICALL Java_com_zettabridge_core_ZBridge_lastLoadError(JNIEnv
 // Starts persisting the runtime report to `path`, rewriting it atomically whenever the report
 // changes. Called once per :guest process, before plugin code runs, so a process that dies
 // silently still leaves its last state on disk (OxygenOS drops our logcat output).
-JNIEXPORT jboolean JNICALL Java_com_zettabridge_core_ZBridge_setReportFile(JNIEnv* env, jclass, jstring path) {
+JNIEXPORT jboolean JNICALL Java_com_ix32psl_core_ZBridge_setReportFile(JNIEnv* env, jclass, jstring path) {
     const std::optional<std::string> file = to_string(env, path);
     if (!file) {
         throw_new(env, "java/lang/NullPointerException", "path");
@@ -187,14 +187,14 @@ JNIEXPORT jboolean JNICALL Java_com_zettabridge_core_ZBridge_setReportFile(JNIEn
 }
 
 // static native String runtimeReport(): the same text that setReportFile persists.
-JNIEXPORT jstring JNICALL Java_com_zettabridge_core_ZBridge_runtimeReport(JNIEnv* env, jclass) {
+JNIEXPORT jstring JNICALL Java_com_ix32psl_core_ZBridge_runtimeReport(JNIEnv* env, jclass) {
     return env->NewStringUTF(zb::runtime_report().text().c_str());
 }
 
 // static native String fixGuestLibrary(String path) throws IOException
 // Applies the shared import fixups in place. Returns "unchanged", "changed: <c1>; <c2>" or
 // "skipped: <reason>" (not an ARM ELF32 shared library); throws IOException on a malformed file.
-JNIEXPORT jstring JNICALL Java_com_zettabridge_core_ZBridge_fixGuestLibrary(JNIEnv* env, jclass, jstring path) {
+JNIEXPORT jstring JNICALL Java_com_ix32psl_core_ZBridge_fixGuestLibrary(JNIEnv* env, jclass, jstring path) {
     const std::optional<std::string> file = to_string(env, path);
     if (!file) {
         throw_new(env, "java/lang/NullPointerException", "path");
@@ -226,20 +226,20 @@ JNIEXPORT jstring JNICALL Java_com_zettabridge_core_ZBridge_fixGuestLibrary(JNIE
 // static native void setPreciseFaults(boolean enabled)
 // Must be called before the guest runtime/Process is constructed: LibraryRuntime is
 // process-lifetime and reads ZB_PRECISE_FAULTS only at Process construction.
-JNIEXPORT void JNICALL Java_com_zettabridge_core_ZBridge_setPreciseFaults(JNIEnv*, jclass, jboolean enabled) {
+JNIEXPORT void JNICALL Java_com_ix32psl_core_ZBridge_setPreciseFaults(JNIEnv*, jclass, jboolean enabled) {
     ::setenv("ZB_PRECISE_FAULTS", enabled ? "1" : "0", 1);
 }
 
 // static native void setDiagnostics(boolean enabled)
 // Turns the profilers and dump tools of the runtime on (debug build) or off (fast build). Called once at
 // start-up, before the guest runs.
-JNIEXPORT void JNICALL Java_com_zettabridge_core_ZBridge_setDiagnostics(JNIEnv*, jclass, jboolean enabled) {
+JNIEXPORT void JNICALL Java_com_ix32psl_core_ZBridge_setDiagnostics(JNIEnv*, jclass, jboolean enabled) {
     zb::set_diagnostics_enabled(enabled != JNI_FALSE);
 }
 
 // static native void setGlDiagnostics(boolean enabled)
 // Must be called before the guest JNI runtime is constructed: it reads ZB_GL_DIAGNOSTICS once.
-JNIEXPORT void JNICALL Java_com_zettabridge_core_ZBridge_setGlDiagnostics(JNIEnv*, jclass, jboolean enabled) {
+JNIEXPORT void JNICALL Java_com_ix32psl_core_ZBridge_setGlDiagnostics(JNIEnv*, jclass, jboolean enabled) {
     ::setenv("ZB_GL_DIAGNOSTICS", enabled ? "1" : "0", 1);
 }
 

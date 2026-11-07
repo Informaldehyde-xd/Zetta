@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-# ZettaBridge
+# IX32PSL
 
 **Current state: Phases 1-3 done (T1-T5 on this machine, T6 on the phone).**
 - `zbrun` runs static and dynamic arm32 Android executables through Dynarmic and the
@@ -40,7 +40,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   screen was texture uploads in `GL_BGRA_EXT`, silently rejected by the GL marshaling.
 - Work is on local branch `codex/phase4d-launcher`, based on `phase1-zbrun`.
 
-Private GitHub repo `ZailoxTT/ZettaBridge` (remote `origin`). Local `phase1-zbrun` tracks
+Private GitHub repo `ZailoxTT/IX32PSL` (remote `origin`). Local `phase1-zbrun` tracks
 `origin/main`. Push only when the user asks or agrees.
 Commit locally after each finished task.
 
@@ -58,7 +58,7 @@ cmake -S . -B build/host -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_CO
 tools/build_guest.sh; ctest --test-dir build/host --output-on-failure; tools/run_guest_tests.sh
 ```
 - **Android arm64 build of the core** (`libzbridge.so`, JNI class
-  `com.zettabridge.core.ZBridge`). Boost headers only, via a directory holding just the
+  `com.ix32psl.core.ZBridge`). Boost headers only, via a directory holding just the
   `boost/` link:
   ```
   N=$HOME/android-ndk-r29; mkdir -p build/boost-headers; ln -sfn /usr/include/boost build/boost-headers/boost; cmake -S . -B build/android-arm64 -G Ninja -DCMAKE_TOOLCHAIN_FILE=$N/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 -DCMAKE_BUILD_TYPE=Release -DZB_BUILD_TESTS=OFF -DBoost_INCLUDE_DIR=$PWD/build/boost-headers; ninja -C build/android-arm64 zbridge
@@ -110,7 +110,7 @@ only the guest's native code. The translator lives once in the launcher; each ad
 game costs only the size of its own APK.
 
 ```
-ZettaBridge.apk (arm64)
+IX32PSL.apk (arm64)
   |
   +-- Library screen: import APK, parse manifest, extract icon/label
   +-- ShortcutManager.requestPinShortcut()  -> home-screen icon per game
@@ -344,7 +344,7 @@ APK's import list) and do not special-case Haxe/lime.
 HaxePunk + OpenFL/lime legacy, compiled through hxcpp, so all game logic is native arm32
 in `libApplicationMain.so`: no managed bytecode, nothing to swap, no source. That is
 exactly why it is the right first test case: it cannot be solved any other way.
-Measured surface in `zettabridge-import-surface.md` (counts re-verified: 91 / 386 / 71 /
+Measured surface in `ix32psl-import-surface.md` (counts re-verified: 91 / 386 / 71 /
 23 / 89 / 32 imports, 443 unique). That doc files 258 symbols under "libc / libm"; the
 real split is in the spec.
 

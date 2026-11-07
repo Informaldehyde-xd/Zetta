@@ -492,7 +492,7 @@ std::uint64_t RuntimeReport::gl_calls() const {
 
 std::string RuntimeReport::text() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    std::string out = "zettabridge-runtime-report 1\n";
+    std::string out = "ix32psl-runtime-report 1\n";
     out += "plugin: ";
     out += plugin_root_.empty() ? "(none)" : plugin_root_;
     if (!plugin_root_.empty()) out += " targetSdk " + std::to_string(target_sdk_);

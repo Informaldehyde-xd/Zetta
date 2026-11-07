@@ -9,7 +9,7 @@ namespace zb {
 
 namespace {
 
-constexpr const char* kDefaultDirectory = "/storage/emulated/0/Android/data/com.zettabridge.launcher/files";
+constexpr const char* kDefaultDirectory = "/storage/emulated/0/Android/data/com.ix32psl.launcher/files";
 
 // Written once, before the guest runs, and read from many threads and from signal handlers, so it
 // is a fixed buffer published through an atomic flag rather than a string behind a mutex.

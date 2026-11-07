@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Checks that com.zettabridge.core.ZBridge and libzbridge.so agree.
+"""Checks that com.ix32psl.core.ZBridge and libzbridge.so agree.
 
 Every `public static native` method of ZBridge.java must have exactly one
-`Java_com_zettabridge_core_ZBridge_<name>` definition in core/android/zbridge_jni.cpp, and the
+`Java_com_ix32psl_core_ZBridge_<name>` definition in core/android/zbridge_jni.cpp, and the
 other way round. A mismatch is invisible on this machine and only shows on the device as an
 UnsatisfiedLinkError, which the ROM then hides with the rest of our logcat output.
 """
@@ -11,11 +11,11 @@ import re
 import sys
 from pathlib import Path
 
-JAVA = "android/launcher/app/src/main/java/com/zettabridge/core/ZBridge.java"
+JAVA = "android/launcher/app/src/main/java/com/ix32psl/core/ZBridge.java"
 NATIVE = "core/android/zbridge_jni.cpp"
 
 JAVA_NATIVE = re.compile(r"public\s+static\s+native\s+[\w\[\]<>., ]+?\s+(\w+)\s*\(")
-JNI_EXPORT = re.compile(r"\bJava_com_zettabridge_core_ZBridge_(\w+)\s*\(")
+JNI_EXPORT = re.compile(r"\bJava_com_ix32psl_core_ZBridge_(\w+)\s*\(")
 
 
 def main() -> int:

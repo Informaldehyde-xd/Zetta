@@ -167,6 +167,31 @@ std::vector<AtomicWordInfo> hot_atomic_words(std::size_t most) {
     return all;
 }
 
+namespace {
+constexpr std::size_t kCodePageWords = (1u << 20) / 64;  // one bit per 4 KB page of the 4 GB guest space
+std::atomic<std::uint64_t> g_code_pages[kCodePageWords];
+}  // namespace
+
+void note_code_page(std::uint32_t vaddr) {
+    const std::uint32_t page = vaddr >> 12;
+    // always a read-modify-write: a plain "already set" check could miss the order of a concurrent invalidation
+    g_code_pages[page >> 6].fetch_or(1ull << (page & 63), std::memory_order_seq_cst);
+}
+
+bool code_in_range(std::uint32_t addr, std::uint32_t len) {
+    if (len == 0) return false;
+    const std::uint64_t end = std::min<std::uint64_t>(static_cast<std::uint64_t>(addr) + len, 1ull << 32);  // exclusive
+    const std::uint32_t first = addr >> 12;
+    const std::uint32_t last = static_cast<std::uint32_t>((end - 1) >> 12);
+    for (std::uint32_t word = first >> 6; word <= (last >> 6); ++word) {
+        std::uint64_t mask = ~0ull;
+        if (word == (first >> 6)) mask &= ~0ull << (first & 63);
+        if (word == (last >> 6)) mask &= ~0ull >> (63 - (last & 63));
+        if ((g_code_pages[word].load(std::memory_order_seq_cst) & mask) != 0) return true;
+    }
+    return false;
+}
+
 std::size_t default_code_cache_size() {
     // 120 MB unless code_cache_mb=N is set in zb-options.txt. Above about 128 MB the translator's
     // branches may not reach, so values from 128 to 512 are for testing only: if a game does not
@@ -490,6 +515,8 @@ bool GuestThread::MemoryWriteExclusive64(std::uint32_t vaddr, std::uint64_t valu
 
 std::optional<std::uint32_t> GuestThread::MemoryReadCode(std::uint32_t vaddr) {
     if (!mem_.accessible(vaddr, 4, kPageExec)) return std::nullopt;
+    note_code_page(vaddr);  // before the bytes are read, so a flush that follows a rewrite is never skipped
+    note_code_page(vaddr + 3);
     std::uint32_t word = load<std::uint32_t>(mem_.base() + vaddr);
     // The old garbage collector in the game (libgc in libmono) takes its lock with the ARM "swp"
     // instruction, which must swap atomically. The translator does it as a read followed by a

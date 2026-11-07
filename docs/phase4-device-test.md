@@ -1,6 +1,6 @@
 # Phase 4 / T7: real ART JNI bridge test
 
-T7 exercises the complete arm64 proxy -> ZettaBridge -> translated arm32 JNI path against the
+T7 exercises the complete arm64 proxy -> IX32PSL -> translated arm32 JNI path against the
 device's real ART. It does not depend on the Phase 0 launcher. The project is
 `android/t7/project/`; generated inputs are under ignored `build/t7/`.
 
@@ -11,7 +11,7 @@ tools/build_guest.sh
 ninja -C build/android-arm64 zbridge zbproxy
 tools/make_t7_bundle.sh
 ANDROID_HOME="$HOME/android-sdk" ANDROID_SDK_ROOT="$HOME/android-sdk" \
-  bash /sdcard/AndroidIDEProjects/ZettaBridge/gradlew \
+  bash /sdcard/AndroidIDEProjects/IX32PSL/gradlew \
   -p "$PWD/android/t7/project" :app:assembleDebug --no-daemon
 ```
 
@@ -25,10 +25,10 @@ use the arm64 `aapt2` configured by `$HOME/.gradle/gradle.properties`. The outpu
 ## Run on the OnePlus 13
 
 1. Install the generated debug APK. If it was copied by the local workflow, it is
-   `/sdcard/AndroidIDEProjects/ZettaBridge/ZBridgeT7-debug.apk`.
+   `/sdcard/AndroidIDEProjects/IX32PSL/ZBridgeT7-debug.apk`.
 2. Open **ZBridge T7** and wait for the final line.
 3. On failure, the full result is copied to the clipboard and written to
-   `/sdcard/Android/data/com.zettabridge.t7/files/t7-result.txt`. Send that first failure before
+   `/sdcard/Android/data/com.ix32psl.t7/files/t7-result.txt`. Send that first failure before
    retrying; force-stop ZBridge T7 before every retry because a failed proxy load requires a fresh
    app process. Force-stop before intentionally running a successful test a second time as well.
 

@@ -11,11 +11,11 @@ int main(int argc, char** argv) {
 
     const char* path = argc > 1 ? argv[1] : "zb_io.tmp";
     FILE* f = fopen(path, "w");
-    int ok = f != NULL && fputs("zettabridge\n", f) >= 0;
+    int ok = f != NULL && fputs("ix32psl\n", f) >= 0;
     if (f != NULL) ok = fclose(f) == 0 && ok;
     char line[64] = {0};
     f = fopen(path, "r");
-    ok = ok && f != NULL && fgets(line, sizeof line, f) != NULL && strcmp(line, "zettabridge\n") == 0;
+    ok = ok && f != NULL && fgets(line, sizeof line, f) != NULL && strcmp(line, "ix32psl\n") == 0;
     if (f != NULL) fclose(f);
     unlink(path);
     printf("file=%s\n", ok ? "PASS" : "FAIL");

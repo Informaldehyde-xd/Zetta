@@ -9,7 +9,7 @@ English and ASCII only.
 - **Phases 1-3 done.** T1-T6 pass: host tests, and the guest suite in Termux and inside
   an app process on the OnePlus 13. Branch `phase1-zbrun`.
 - **Phase 0 launcher works on the phone** and is merged into `phase1-zbrun`
-  (`android/launcher/`, phone copy `/sdcard/AndroidIDEProjects/ZettaBridge`).
+  (`android/launcher/`, phone copy `/sdcard/AndroidIDEProjects/IX32PSL`).
 - **Part 1 (JNI bridge) spec approved:**
   `docs/superpowers/specs/2026-09-14-jni-bridge-design.md`. Follow it; do not redesign
   without asking the user.
@@ -205,7 +205,7 @@ the host suite):
     - `ZBridge.onProxyLoaded`;
     - binding `Java_*` exports through the real `RegisterNatives`;
     - guest `JNI_OnLoad`;
-    - launcher class loader: delegate `com.zettabridge.core.*` to the launcher, and
+    - launcher class loader: delegate `com.ix32psl.core.*` to the launcher, and
       `findLibrary` returns proxies for armeabi libs;
     - extracting and fixing armeabi libs at import;
     - device test T7 and the Orange Roulette smoke test.
@@ -299,7 +299,7 @@ Orange Roulette smoke launch.
 - Portable state machine `zb::ProxyRuntime` + real graph `zb::GuestJniEngine` (LibraryRuntime,
   HostJni chained before start, JniLoader) in `core/include/zb/proxy_runtime.h`; Android glue
   `core/android/guest_jni_runtime.*` (JniEnvBackend, never destroyed) and `zbridge_jni.cpp`.
-- Java API (`com.zettabridge.core.ZBridge`, launcher copy): `activatePlugin(String pluginRoot, int
+- Java API (`com.ix32psl.core.ZBridge`, launcher copy): `activatePlugin(String pluginRoot, int
   targetSdk, ClassLoader)` throws IllegalStateException; `onProxyLoaded(String)`; `loadError(String)`
   and `lastLoadError()` return the stored message or null; `fixGuestLibrary(String)` returns
   `unchanged` / `changed: ...` / `skipped: ...` or throws IOException.
@@ -316,7 +316,7 @@ Orange Roulette smoke launch.
 
 ## Repository (2026-09-15)
 
-- Private GitHub repo: https://github.com/ZailoxTT/ZettaBridge (GPL-3.0, README.md plus
+- Private GitHub repo: https://github.com/ZailoxTT/IX32PSL (GPL-3.0, README.md plus
   README.ru.md).
 - Local `phase1-zbrun` tracks `origin/main`.
 - Do not push without the user's agreement.
@@ -350,7 +350,7 @@ Orange Roulette smoke launch.
   - ABI priority is arm64-v8a, armeabi-v7a, then armeabi; old 32-bit imports require reimport;
   - staging import runs `fixGuestLibrary` before metadata/publication, removes stale native files,
     and preserves `plugins/<pkg>/data` on reimport;
-  - `PluginClassLoader` delegates only `com.zettabridge.core.*`, returns real arm64 libraries or
+  - `PluginClassLoader` delegates only `com.ix32psl.core.*`, returns real arm64 libraries or
     atomically-created `plugins/<pkg>/proxy/lib<name>.so` copies for arm32, and returns null for the
     normal system fallback when a library is absent;
   - `tools/make_launcher_bundle.sh` produces an ignored 6.9 MiB `build/launcher` tree from the exact
@@ -388,7 +388,7 @@ Orange Roulette smoke launch.
   - `tools/make_t7_bundle.sh`: PASS, 7.0 MiB; Java compile and ELF/export checks pass;
   - Gradle 8.11.1 / AGP 8.7.3 `:app:assembleDebug`: PASS on the arm64 phone host;
     the ready APK is copied to
-    `/sdcard/AndroidIDEProjects/ZettaBridge/ZBridgeT7-debug.apk` (6.0 MiB);
+    `/sdcard/AndroidIDEProjects/IX32PSL/ZBridgeT7-debug.apk` (6.0 MiB);
   - host suite 28/28; guest suite 9/9; JNI generator check PASS;
   - Android `zbridge`/`zbproxy` link and proxy structure check PASS.
 - First device run reached the `strings` checkpoint and failed only at `zbt7probe.c:94`:
@@ -421,9 +421,9 @@ Orange Roulette smoke launch.
   synchronizes on itself, matching the T7 loader. `LauncherContractsTest` and the signed launcher
   APK build both pass.
 - Ready device files:
-  - launcher APK: `/sdcard/AndroidIDEProjects/ZettaBridge/ZettaBridge-launcher-debug.apk`, SHA-256
+  - launcher APK: `/sdcard/AndroidIDEProjects/IX32PSL/IX32PSL-launcher-debug.apk`, SHA-256
     `e6ec3a52a64dbfb556fcbf405c480c74a1b95b8fbe396914676f7fcb1c7977a3`;
-  - untouched Orange Roulette APK: `/sdcard/AndroidIDEProjects/ZettaBridge/orange-roulette-1-0-0.apk`,
+  - untouched Orange Roulette APK: `/sdcard/AndroidIDEProjects/IX32PSL/orange-roulette-1-0-0.apk`,
     SHA-256 `1fb252e27c06bc8f1a438a8bbed69f8feb75de4245a6105c04d4ca06982b3864`.
 - **NEXT/device action:** install/update the launcher, import the Orange Roulette APK, launch it,
   and preserve the first on-screen/clipboard/file failure. A failed guest load requires force-stop
@@ -480,8 +480,8 @@ Guest semantics are unchanged: an unimplemented host call is still logged once, 
 example:
 
 ```text
-zettabridge-runtime-report 1
-plugin: /data/user/0/com.zettabridge.launcher/files/plugins/com.heyhouser.OrangeRoulette targetSdk 16
+ix32psl-runtime-report 1
+plugin: /data/user/0/com.ix32psl.launcher/files/plugins/com.heyhouser.OrangeRoulette targetSdk 16
 proxy-loads: 6
 proxy-failures: 0
 proxy-loaded: libstd.so jni=0x00010006
@@ -507,7 +507,7 @@ guest-exit: guest SIGSEGV: read of 0x00000000, pc 0xf3a12345 in libApplicationMa
 there is something to report. `(none)` marks a fact nothing was recorded for.
 
 **Where it lands on the device.**
-`/sdcard/Android/data/com.zettabridge.launcher/files/zb-runtime-report.txt`, next to the existing
+`/sdcard/Android/data/com.ix32psl.launcher/files/zb-runtime-report.txt`, next to the existing
 `zb-errors.txt`. The `:guest` process starts persisting it in `ZbApplication.onCreate` before any
 plugin code runs (`Diagnostics.startRuntimeReport` -> `ZBridge.setReportFile`). The file is
 rewritten atomically (temp file, `fsync`, `rename`) on every structural change - a new distinct
@@ -522,7 +522,7 @@ shows the text and copies it, plus the file path, to the clipboard.
 
 1. Rebuild the launcher project (`android/launcher/`, AndroidIDE, NDK r29) so it picks up the new
    `libzbridge.so` and launcher Java, and install the resulting APK over the old one.
-2. Open ZettaBridge, long-press Orange Roulette, and choose **Delete**, then import
+2. Open IX32PSL, long-press Orange Roulette, and choose **Delete**, then import
    `orange-roulette-1-0-0.apk` again (a fresh import also force-stops the `:guest` process). If the
    app is already imported and was never launched since the update, importing again is enough.
 3. Tap Orange Roulette and let it run until it returns to the launcher by itself, or wait about ten
@@ -530,7 +530,7 @@ shows the text and copies it, plus the file path, to the clipboard.
 4. Back in the library screen, long-press Orange Roulette and choose **Last run report**. The report
    is now on the clipboard.
 5. Paste that text back into the chat. If the entry says there is no report yet, send
-   `/sdcard/Android/data/com.zettabridge.launcher/files/zb-errors.txt` instead.
+   `/sdcard/Android/data/com.ix32psl.launcher/files/zb-errors.txt` instead.
 
 The run answers Task 8 when the report shows six `proxy-loaded:` lines, the guest `JNI_OnLoad`
 results, a non-zero `registered-natives:`, and a `first-unimplemented:` naming a generated GLES or
@@ -621,10 +621,10 @@ decided; implement it, do not redesign.
 No more copying projects to the phone:
 
 ```
-ninja -C build/android-arm64 zbridge zbproxy; tools/make_launcher_bundle.sh; cd android/launcher; ANDROID_HOME=$HOME/android-sdk ANDROID_SDK_ROOT=$HOME/android-sdk ./gradlew --no-daemon assembleDebug; cd -; cp android/launcher/app/build/outputs/apk/debug/app-debug.apk /sdcard/ZettaBridge-debug.apk
+ninja -C build/android-arm64 zbridge zbproxy; tools/make_launcher_bundle.sh; cd android/launcher; ANDROID_HOME=$HOME/android-sdk ANDROID_SDK_ROOT=$HOME/android-sdk ./gradlew --no-daemon assembleDebug; cd -; cp android/launcher/app/build/outputs/apk/debug/app-debug.apk /sdcard/IX32PSL-debug.apk
 ```
 
-The user installs `/sdcard/ZettaBridge-debug.apk`. The APK carries the runtime bundle
+The user installs `/sdcard/IX32PSL-debug.apk`. The APK carries the runtime bundle
 (`assets/zb`, 17 files) and `libzbridge.so`.
 
 ### Next: write the Part 4 spec and the Phase 5 plan, then implement
@@ -893,7 +893,7 @@ on this machine.
   new cases are `gl_chain_test_no-backend` and `gl_chain_test_with-backend`); guest 9/9; Android
   arm64 `zbridge` and `zbproxy` link (`zbridge` now links `GLESv2`/`EGL`). Launcher APK rebuilt
   via `tools/make_launcher_bundle.sh` + `./gradlew assembleDebug` and copied to
-  `/sdcard/ZettaBridge-debug.apk` (~9.1 MB).
+  `/sdcard/IX32PSL-debug.apk` (~9.1 MB).
 - **NEXT:** Phase 5 Task 9 (device run) can now read the GL report fields to confirm or refute
   the threading assumption before Tasks 6-7 are built. If it confirms guest GL calls land on a
   thread with a current EGL context, Tasks 6-7 (guest probe, `AAsset*`) are the remaining work
@@ -1061,7 +1061,7 @@ JNI 0xFB00+.** New stub names must be **appended**, never merged into an existin
 literal indices. `gen_gles.py`'s index check now rebuilds its expectation from every stub library
 (`eb6cd42`), so adding a library no longer breaks it.
 
-**NEXT (task 10):** the APK at `/sdcard/ZettaBridge-debug.apk` (built 2026-09-17 19:28 UTC)
+**NEXT (task 10):** the APK at `/sdcard/IX32PSL-debug.apk` (built 2026-09-17 19:28 UTC)
 carries all of this. Ask the user to run the Flutter guest, then write `docs/phase7a-acceptance.md`
 from the report and update `CLAUDE.md`. Expected in the report: a created context and window
 surface, `egl-swaps` rising, no `egl-thread-mismatch`, `unimplemented-host-calls: 0`. If the guest
@@ -1085,7 +1085,7 @@ The packaging script and runtime completeness check now require it. Launcher con
 bundle validator, Android `zbridge`/`zbproxy` targets and the Gradle debug APK build pass; the
 final APK contains `assets/zb/guest/lib/libEGL.so`.
 
-**NEXT:** install `/sdcard/ZettaBridge-debug.apk` (SHA-256
+**NEXT:** install `/sdcard/IX32PSL-debug.apk` (SHA-256
 `8c196fbc9ed682d3cf4d364a4e51404c856a8297651cfdb7dbac80a8c8af2db2`), force-stop or reimport
 `com.example.perecup_simulator`, rerun it, and send the Last run report. Task 10 remains open
 until that report is recorded in `docs/phase7a-acceptance.md`.
@@ -1114,7 +1114,7 @@ missing `libjnigraphics.so`. A real translated `dlopen(RTLD_NOW)` of avtobuy's a
 44/44, guest 9/9, GLES/EGL/JNI generators pass, Android `zbridge`/`zbproxy` link, bundle validator
 passes and the Gradle debug APK builds.
 
-**NEXT:** install `/sdcard/ZettaBridge-debug.apk` (SHA-256
+**NEXT:** install `/sdcard/IX32PSL-debug.apk` (SHA-256
 `1781da56accd7c25698805a5dd1f15a8b4112d063af2f79d1cea7c1971847455`), force-stop or reimport
 `com.example.perecup_simulator`, rerun it, and send the Last run report. If it reaches one of the
 safe fallbacks, implement only the first path it actually uses. Task 10 is still open.
@@ -1139,7 +1139,7 @@ TDD: the expanded `platform_compat_test` first failed at `looper != 0`, then pas
 minimal implementation. Fresh verification: generators pass, host 44/44, guest 9/9, Android
 `zbridge`/`zbproxy` link, launcher bundle validation passes, and Gradle `assembleDebug` passes.
 
-**NEXT:** install `/sdcard/ZettaBridge-debug.apk` (SHA-256
+**NEXT:** install `/sdcard/IX32PSL-debug.apk` (SHA-256
 `24a7c18c0dd81ae3ea6639efcd8d9b258c00c3dd912162e21e70dd2ea5cdb21a`), force-stop the launcher,
 rerun `com.example.perecup_simulator`, wait about 10 seconds, and send the Last run report. A
 likely next boundary is `ALooper_addFd`; do not implement polling or guest callbacks without the
@@ -1230,7 +1230,7 @@ tools/make_launcher_bundle.sh                                PASS (7.1 MiB)
 Gradle :app:assembleDebug                                    PASS
 ```
 
-The ready APK is `/sdcard/ZettaBridge-debug.apk`, 9,226,800 bytes, SHA-256
+The ready APK is `/sdcard/IX32PSL-debug.apk`, 9,226,800 bytes, SHA-256
 `956780e0caee29702a903b36c31ca13946cab1918f9d8ec1727d9dfe592ac047`.
 Its ZIP contains the generated guest `libandroid.so` and the rebuilt arm64 `libzbridge.so`.
 
@@ -1298,7 +1298,7 @@ returns the literal associated with each target. The focused translated run pass
 
 Current branch is `codex/phase4d-launcher`. The only dirty path before this handoff was the
 intentional existing `third_party/dynarmic` submodule baseline. The last known APK is
-`/sdcard/ZettaBridge-debug.apk`, SHA-256
+`/sdcard/IX32PSL-debug.apk`, SHA-256
 `956780e0caee29702a903b36c31ca13946cab1918f9d8ec1727d9dfe592ac047`.
 
 ## Flutter: why no frame is ever drawn (2026-09-18)
@@ -1352,7 +1352,7 @@ New report lines: `looper-attached: <n>` and `looper-host-callbacks: fired=<n> g
 failed=<n>`.
 
 Local gate: 47/47 host tests, Android `zbridge`/`zbproxy`, launcher bundle and Gradle debug APK
-all pass. `/sdcard/ZettaBridge-debug.apk` is 9,344,152 bytes, SHA-256
+all pass. `/sdcard/IX32PSL-debug.apk` is 9,344,152 bytes, SHA-256
 `d0bd5ffdfa32b5d1801410ae6a3049263ca404bb7b027ecf3740d8873499de42`.
 
 **NEXT/device gate:** install it, launch the Flutter plugin, and check the report for
@@ -1385,7 +1385,7 @@ hand-computed expected values covering the rounding boundary (a low half of exac
 sum and a borrow. It is `run_case asimd_narrow_static 0` in `tools/run_guest_tests.sh`.
 
 Local gate: 47/47 host tests, 11/11 guest tests, Android `zbridge`/`zbproxy`, launcher bundle and
-Gradle debug APK all pass. `/sdcard/ZettaBridge-debug.apk` is 9,353,448 bytes, SHA-256
+Gradle debug APK all pass. `/sdcard/IX32PSL-debug.apk` is 9,353,448 bytes, SHA-256
 `e3855dcbaf9c4f2ea0a4d1e893263782244d36b0032c3b5316b10369cbc75e06`.
 
 **NEXT/device gate:** install it and run the Flutter plugin past PNG decoding; the previous SIGILL
@@ -1452,7 +1452,7 @@ real host-call path with context `0xc0ffee`, buffer 77, exact independently comp
 map/flush/unmap, and a second-map collision. Fresh gate: host 47/47, guest 11/11, Android
 `zbridge`/`zbproxy`, launcher bundle and Gradle debug APK all pass.
 
-Ready APK: `/sdcard/ZettaBridge-debug.apk`, 9,370,184 bytes, SHA-256
+Ready APK: `/sdcard/IX32PSL-debug.apk`, 9,370,184 bytes, SHA-256
 `6c86772a0d3aa15e4d0e6bb5f44bfa9922512395887585b351d255f1dc62ad40`.
 
 **NEXT/device gate:** install this APK, force-stop the launcher, run avtobuy for long enough to
@@ -1487,7 +1487,7 @@ buffer 91, uploads independently known bytes 0..63 through `GL_ARRAY_BUFFER`, bi
 as a UBO, and checks the exact whole-upload and bound-slice FNV values. Fresh gate: host 47/47,
 guest 11/11, Android `zbridge`/`zbproxy`, launcher bundle and Gradle debug APK all pass.
 
-Ready APK: `/sdcard/ZettaBridge-debug.apk`, 9,376,552 bytes, SHA-256
+Ready APK: `/sdcard/IX32PSL-debug.apk`, 9,376,552 bytes, SHA-256
 `4e367d04cc471ccbe56d92183d3bd27b40a94872ee29e261b84f02ddd4912829`.
 
 **NEXT/device gate:** install this APK, force-stop the launcher, reproduce the missing text, and
@@ -1532,7 +1532,7 @@ bytes, an injected `GL_INVALID_ENUM`, its report line, and that the error remain
 gate: focused test PASS, host 47/47, Android `zbridge`/`zbproxy` link, launcher bundle and Gradle
 debug APK build all pass.
 
-Ready APK: `/sdcard/ZettaBridge-debug.apk`, 9,377,080 bytes, SHA-256
+Ready APK: `/sdcard/IX32PSL-debug.apk`, 9,377,080 bytes, SHA-256
 `f2b7a3a35a3b153ba9c0e68a36b44be2db6a932378ed6b4b0b1ed14e325f7110`.
 
 **NEXT/device gate:** install this APK, force-stop the launcher, reproduce the missing text and send
@@ -1556,7 +1556,7 @@ The host test observed RED first and now asserts the translated allocation, all 
 the translated sub-image. Fresh gate: host 47/47, Android `zbridge`/`zbproxy`, launcher bundle and
 Gradle debug APK all pass.
 
-Ready A/B APK: `/sdcard/ZettaBridge-debug.apk`, 9,377,272 bytes, SHA-256
+Ready A/B APK: `/sdcard/IX32PSL-debug.apk`, 9,377,272 bytes, SHA-256
 `92e1e04b66716bc1a41a432658d2e6fa88b21f73a232df39dbf6409344145c39`.
 
 **NEXT/device gate:** install, force-stop and launch avtobuy twice. Report whether text or the four
@@ -1629,8 +1629,8 @@ run. Start from `guest/tests/sigrestart_dynamic.c` and `guest/tests/filemap_dyna
 Device loop, for reference: `ninja -C build/android-arm64`, `tools/make_launcher_bundle.sh`,
 `cd android/launcher && ANDROID_HOME=$HOME/android-sdk ./gradlew --offline -q assembleRelease`,
 copy to `/sdcard`. The report the phone writes is
-`/storage/emulated/0/Android/data/com.zettabridge.launcher/files/zb-runtime-report.txt`;
-`su -c "logcat -b all --pid=$(su -c pidof com.zettabridge.launcher:guest)"` is the only way to see
+`/storage/emulated/0/Android/data/com.ix32psl.launcher/files/zb-runtime-report.txt`;
+`su -c "logcat -b all --pid=$(su -c pidof com.ix32psl.launcher:guest)"` is the only way to see
 the guest's own log, because the ROM drops third-party logcat.
 
 ## 2026-10-01: signal/syscall/file-I/O race stress test does not reproduce locally
@@ -1678,7 +1678,7 @@ Ready APK: `android/launcher/app/build/outputs/apk/release/ZBridgeT6-signal-race
 21,826,717 bytes, SHA-256
 `d85fc2e8638376ea01c46ce8c1b8bdf50fa66eb66511bb042cf9513af54b573e`.
 
-**NEXT/device gate:** install this separate `com.zettabridge.t6` APK and open **ZBridge T6**. Send
+**NEXT/device gate:** install this separate `com.ix32psl.t6` APK and open **ZBridge T6**. Send
 the screen result around `sigio_race_dynamic` (or the last visible line if the `:guest` process
 exits/hangs). `PASS sigio_race_dynamic` means the constructed race also survives the real Android
 process; it still does not exonerate the exact Unity workload, so the following step is bounded
@@ -1813,12 +1813,12 @@ the likely boundary would then be class lookup during the activity-first bootstr
 ### Activity-first class-loader follow-up ready
 
 The next Lane Racer run confirmed that boundary: the activity-first path executed, but direct
-`FindClass("com/zettabridge/core/ZBridge")` used the framework/system loader and failed before
+`FindClass("com/ix32psl/core/ZBridge")` used the framework/system loader and failed before
 callbacks were installed. The report still had no `jni-input-queue`, and logcat recorded both the
 class lookup failure and the proxy-load refusal.
 
 The activity-first path now obtains the plugin `ClassLoader` from the host Activity and calls its
-`loadClass("com.zettabridge.core.ZBridge")`; `PluginClassLoader` already delegates that namespace
+`loadClass("com.ix32psl.core.ZBridge")`; `PluginClassLoader` already delegates that namespace
 to the launcher. Both the proxy-load and activity-created calls reuse this resolved class. The
 JNI_OnLoad-first path retains direct `FindClass`. The fake-JNI test deliberately makes direct
 ZBridge lookup fail in activity-first order, observed RED, and now passes through the activity

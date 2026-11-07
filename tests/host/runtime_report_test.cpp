@@ -56,7 +56,7 @@ std::string read_file(const fs::path& path) {
 void check_empty_report() {
     zb::RuntimeReport report;
     const std::string text = report.text();
-    CHECK(lines(text).at(0) == "zettabridge-runtime-report 1");
+    CHECK(lines(text).at(0) == "ix32psl-runtime-report 1");
     CHECK(line_with(text, "plugin:") == "plugin: (none)");
     CHECK(line_with(text, "proxy-loads:") == "proxy-loads: 0");
     CHECK(line_with(text, "jni-onload-calls:") == "jni-onload-calls: 0");
@@ -214,7 +214,7 @@ void check_host_call_bound() {
 
 void check_loads_and_natives() {
     zb::RuntimeReport report;
-    report.note_plugin("/data/user/0/com.zettabridge.launcher/files/plugins/com.heyhouser.OrangeRoulette", 16);
+    report.note_plugin("/data/user/0/com.ix32psl.launcher/files/plugins/com.heyhouser.OrangeRoulette", 16);
     report.note_proxy_loaded("libstd.so", 0x00010006);
     report.note_proxy_loaded("liblime.so", 0x00010004);
     report.note_proxy_failed("libopenal.so", "guest dlopen failed:\ncannot locate symbol");
@@ -226,7 +226,7 @@ void check_loads_and_natives() {
     CHECK(report.jni_onload_calls() == 2);
     CHECK(report.registered_natives() == 20);
     const std::string text = report.text();
-    CHECK(contains(text, "plugin: /data/user/0/com.zettabridge.launcher/files/plugins/"
+    CHECK(contains(text, "plugin: /data/user/0/com.ix32psl.launcher/files/plugins/"
                          "com.heyhouser.OrangeRoulette targetSdk 16"));
     CHECK(line_with(text, "proxy-loads:") == "proxy-loads: 2");
     CHECK(line_with(text, "proxy-failures:") == "proxy-failures: 1");

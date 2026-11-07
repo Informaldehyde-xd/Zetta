@@ -26,7 +26,7 @@
 2. **One proxy path per guest library.** The class loader copies the packaged `libzbproxy.so` to `plugins/<pkg>/proxy/lib<name>.so` atomically and returns that unique read-only path.
 3. **Fixed runtime layout.** Launcher assets extract to `files/zb/{sysroot,guest}`. The plugin root and guest library basename are derived from the proxy path; `targetSdk` comes from the plugin record established before plugin `Application.onCreate`.
 4. **Calling thread is preserved.** Loading, `dlsym`, export binding, and `JNI_OnLoad` use the current Java thread's cached carrier, or `call_on_current` for a nested guest-to-Java-to-load transition.
-5. **Class lookup is plugin-scoped.** The active plugin class loader is retained as a global reference for reflection/binding; launcher bridge classes remain parent-first only for `com.zettabridge.core.*`.
+5. **Class lookup is plugin-scoped.** The active plugin class loader is retained as a global reference for reflection/binding; launcher bridge classes remain parent-first only for `com.ix32psl.core.*`.
 6. **ELF mutation is shared C++.** The Python fixer remains a reference/compatibility entry point, while core owns the validated implementation used by host tests, the developer CLI, and launcher JNI.
 7. **No silent multi-plugin reuse.** Once the process-lifetime guest runtime starts for one plugin root/targetSdk, an attempt to activate an incompatible plugin in the same `:guest` process fails explicitly. Process pooling is outside Phase 4d.
 
@@ -71,7 +71,7 @@
 
 **Files:**
 - Modify: `core/android/jni_env_backend.h`, `core/android/jni_env_backend.cpp`
-- Create: `android/t7/java/com/zettabridge/t7/ReflectionSmoke.java`
+- Create: `android/t7/java/com/ix32psl/t7/ReflectionSmoke.java`
 - Modify: `core/CMakeLists.txt`
 
 **Produces:** exact descriptor construction and declared-native enumeration through the active plugin class loader on real ART.
@@ -101,7 +101,7 @@
 - Modify: `core/android/zbridge_jni.cpp`
 - Create: `core/android/guest_jni_runtime.h`, `core/android/guest_jni_runtime.cpp`
 - Modify: `core/CMakeLists.txt`
-- Create: `android/launcher/app/src/main/java/com/zettabridge/core/ZBridge.java`
+- Create: `android/launcher/app/src/main/java/com/ix32psl/core/ZBridge.java`
 
 **Produces:** Java initialization/fixup calls and native `onProxyLoaded`, backed by one configured `LibraryRuntime + JniEnvBackend + HostJni + JniLoader` graph.
 
@@ -114,7 +114,7 @@
 ### Task 6: Launcher ABI extraction, class loading, and bundle
 
 **Files:**
-- Create: `android/launcher/app/src/main/java/com/zettabridge/launcher/PluginClassLoader.java`
+- Create: `android/launcher/app/src/main/java/com/ix32psl/launcher/PluginClassLoader.java`
 - Modify: `LoadedPlugin.java`, `PluginStore.java`, `PluginRecord.java`, `GuestRuntime.java`, `LibraryActivity.java`
 - Modify: `android/launcher/app/build.gradle.kts`
 - Create: `tools/make_launcher_bundle.sh`
@@ -127,13 +127,13 @@
 - [x] Extract the selected arm32 ABI to the private plugin lib dir, invoke the native fixer before marking import complete, and leave the APK unchanged/read-only.
 - [x] Build runtime assets from exactly the 10 sysroot files plus `zbhost`, `libzbcompat.so`, `libzbjni.so`, generated `libGLESv2.so`/`libandroid.so`, `libzbridge.so`, and `libzbproxy.so`; make Gradle consume only ignored `build/launcher` outputs.
 - [x] Initialize runtime assets before plugin code, create `PluginClassLoader`, and preserve the existing resource/context fixes.
-- [x] Run Java compile checks, bundle validation (filenames, ELF class/machine, size), launcher Gradle build where available, and existing core suites; commit `launcher: route arm32 libraries through ZettaBridge`.
+- [x] Run Java compile checks, bundle validation (filenames, ELF class/machine, size), launcher Gradle build where available, and existing core suites; commit `launcher: route arm32 libraries through IX32PSL`.
 
 **Task 6 decisions:** ABI priority is arm64-v8a, armeabi-v7a, then armeabi. Imports are
 prepared in a sibling staging directory; metadata is written last, the old plugin data directory
 is preserved, and the staged directory replaces all other old files. Runtime assets are versioned
 and atomically installed under `files/zb`. `PluginClassLoader` is child-first outside platform
-classes, delegates only `com.zettabridge.core.*` to the launcher, and creates one immutable proxy
+classes, delegates only `com.ix32psl.core.*` to the launcher, and creates one immutable proxy
 copy per arm32 library. This checkout has no Gradle wrapper or system Gradle, so the portable full
 Java compile harness replaces the unavailable local APK build; AndroidIDE/device packaging remains
 part of Task 7.

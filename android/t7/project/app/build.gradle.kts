@@ -3,11 +3,11 @@ plugins {
     id("com.android.application")
 }
 android {
-    namespace = "com.zettabridge.t7"
+    namespace = "com.ix32psl.t7"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.zettabridge.t7"
+        applicationId = "com.ix32psl.t7"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

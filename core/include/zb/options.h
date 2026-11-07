@@ -39,6 +39,10 @@ namespace zb {
 //   perf_hint               (default 1)  Tell Android (PerformanceHint API, Android 13+) which of the game's
 //                                        threads are working flat out, so it can give them a faster core
 //                                        and clock. Uses a little more power. Does nothing without the API.
+//   invalidate_only_code    (default 1)  A memory-map call (mmap, munmap, mprotect, brk) or a cache flush only
+//                                        goes through every thread's code cache when the range holds
+//                                        memory the game ever executed from. Heap and texture memory
+//                                        no longer cost every thread an invalidation.
 bool option_enabled(const char* name, bool default_value);
 // A whole-number setting from the same file ("name=96"); the default when it is missing or not a number.
 int option_number(const char* name, int default_value);

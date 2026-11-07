@@ -1,4 +1,8 @@
-# ZettaBridge
+# IX32PSL
+
+> IX32PSL is a personal, noncommercial fork of **ZettaBridge** by ZailoxTT
+> (https://github.com/ZailoxTT). The original licences (PolyForm Noncommercial 1.0.0 and PolyForm
+> Perimeter 1.0.1, see [LICENSE](LICENSE)) apply in full. Only the name was changed.
 
 **Run 32-bit Android apps on 64-bit-only ARM phones.**
 An open-source ARM32 -> ARM64 native code translator and app launcher.
@@ -11,7 +15,7 @@ A growing number of recent phone SoCs (for example the Snapdragon 8 Elite) have 
 execution state at all. Old apps that ship only `armeabi` / `armeabi-v7a` native libraries
 cannot start on them, and there is no hardware fallback.
 
-ZettaBridge runs such an app **inside its own process**:
+IX32PSL runs such an app **inside its own process**:
 - the app's Java/Kotlin code runs natively on the phone's normal 64-bit ART;
 - only the app's 32-bit native code is translated to AArch64.
 
@@ -26,12 +30,12 @@ No root, no custom ROM, no system image changes.
 | ![Intro screen](images/screenshots/intro.jpg) | ![Main menu](images/screenshots/menu.jpg) | ![Gameplay](images/screenshots/gameplay.jpg) |
 
 Every pixel above was drawn by translated 32-bit ARM code: a OnePlus 13 (Snapdragon 8 Elite) has
-no AArch32 execution state, so the game cannot start on it at all without ZettaBridge.
+no AArch32 execution state, so the game cannot start on it at all without IX32PSL.
 
 ## How it works
 
 ```
-ZettaBridge launcher (arm64 app)
+IX32PSL launcher (arm64 app)
  |
  +-- imports an APK as a plugin, pins a home-screen shortcut (nothing is installed)
  +-- :guest process
@@ -47,7 +51,7 @@ ZettaBridge launcher (arm64 app)
 - **Native code is translated by [Dynarmic](https://github.com/Vita3K/dynarmic)**
   (0BSD), an ARM dynamic recompiler, with a small local patch for ARMv8 Thumb-2 opcodes.
 - **The guest runs the real arm32 bionic.** The Android linker, libc and friends come from
-  an AOSP system image. ZettaBridge translates Linux syscalls, not libc functions.
+  an AOSP system image. IX32PSL translates Linux syscalls, not libc functions.
 - **Java <-> native goes through a JNI bridge.**
   - `System.loadLibrary` on a 32-bit library loads a tiny arm64 proxy instead.
   - The proxy binds the guest's `Java_*` exports and runs its `JNI_OnLoad`.
@@ -130,8 +134,8 @@ described in `CLAUDE.md` and `docs/`.
 
 ## Supporting the project
 
-ZettaBridge is written by one person. If it runs an app you needed, [Boosty](https://boosty.to/zailox)
-keeps the work going.
+The original ZettaBridge is written by one person, ZailoxTT. If it runs an app you needed,
+[Boosty](https://boosty.to/zailox) keeps that work going.
 
 ## Contributing
 
@@ -152,7 +156,7 @@ from, and what happens.
 
 ## License
 
-ZettaBridge is **source-available, not open source**. Two licences apply cumulatively (see
+IX32PSL is **source-available, not open source**. Two licences apply cumulatively (see
 [LICENSE](LICENSE)): **PolyForm Noncommercial 1.0.0** and **PolyForm Perimeter 1.0.1**. Read it,
 change it, share it for noncommercial purposes. What both together forbid: making money from it,
 and providing others a competing product - a competing product counts even when it is free.

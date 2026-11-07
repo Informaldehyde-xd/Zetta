@@ -1,6 +1,6 @@
-# Builds the ZettaBridge launcher on GitHub's servers (no PC needed) and produces TWO APKs:
-#   ZettaBridge-fast   no profilers, no dump tools: the one to play with
-#   ZettaBridge-debug  every profiler and dump tool on: the one to send logs from
+# Builds the IX32PSL launcher on GitHub's servers (no PC needed) and produces TWO APKs:
+#   IX32PSL-fast   no profilers, no dump tools: the one to play with
+#   IX32PSL-debug  every profiler and dump tool on: the one to send logs from
 # The slow native part is built once ("native" job); the two APKs are then made side by side
 # ("apk" job, matrix) from the same native libraries, so the second APK costs a few minutes.
 #
@@ -226,14 +226,14 @@ jobs:
         run: |
           set -eu
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
-            mkdir -p "$HOME/.zettabridge"
-            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$HOME/.zettabridge/release.jks"
+            mkdir -p "$HOME/.ix32psl"
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$HOME/.ix32psl/release.jks"
             {
-              echo "storeFile=$HOME/.zettabridge/release.jks"
+              echo "storeFile=$HOME/.ix32psl/release.jks"
               echo "storePassword=$KEYSTORE_PASSWORD"
               echo "keyAlias=$KEY_ALIAS"
               echo "keyPassword=$KEY_PASSWORD"
-            } > "$HOME/.zettabridge/signing.properties"
+            } > "$HOME/.ix32psl/signing.properties"
             echo "signed=true" >> "$GITHUB_OUTPUT"
             echo "Release key found: building a signed release APK."
           else
@@ -260,12 +260,12 @@ jobs:
           set -eu
           mkdir -p out
           apk="$(ls android/launcher/app/build/outputs/apk/*/*.apk | head -1)"
-          cp "$apk" "out/ZettaBridge-${{ matrix.variant }}.apk"
+          cp "$apk" "out/IX32PSL-${{ matrix.variant }}.apk"
           ls -l out
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4
         with:
-          name: ZettaBridge-${{ matrix.variant }}-${{ github.run_number }}
-          path: out/ZettaBridge-${{ matrix.variant }}.apk
+          name: IX32PSL-${{ matrix.variant }}-${{ github.run_number }}
+          path: out/IX32PSL-${{ matrix.variant }}.apk
           retention-days: 30

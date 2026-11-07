@@ -269,6 +269,10 @@ void Process::request_exit(int status) {
 }
 
 void Process::invalidate(std::uint32_t addr, std::uint32_t len) {
+    // Memory that no instruction was ever fetched from holds no translated code: nothing to throw away.
+    // (invalidate_only_code=0 in zb-options.txt goes back to flushing every range.)
+    static const bool only_code = option_enabled("invalidate_only_code", true);
+    if (only_code && !code_in_range(addr, len)) return;
     std::lock_guard<std::mutex> lock(threads_mutex_);
     for (GuestThread* t : threads_) t->invalidate(addr, len);
     for (GuestThread* t : borrowers_) t->invalidate(addr, len);

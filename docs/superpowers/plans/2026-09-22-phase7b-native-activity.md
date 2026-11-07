@@ -62,7 +62,7 @@ Changed:
 ## Task 1: the proxy export and the launcher entry point
 
 - [ ] `core/android/zbproxy.c` exports `ANativeActivity_onCreate(ANativeActivity*, void*, size_t)`.
-      It calls `static int com.zettabridge.core.ZBridge.onNativeActivityCreated(long activity,
+      It calls `static int com.ix32psl.core.ZBridge.onNativeActivityCreated(long activity,
       long savedState, long savedStateSize, String proxyPath)` and, when that returns nonzero,
       leaves the activity as the bridge configured it.
 - [ ] A failure path that a user can see: no bridge, a throwing bridge or an unknown proxy path

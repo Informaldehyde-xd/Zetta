@@ -7,7 +7,7 @@
         android:label="ZBridge T7"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
-            android:name="com.zettabridge.t7.T7Activity"
+            android:name="com.ix32psl.t7.T7Activity"
             android:exported="true"
             android:process=":guest">
             <intent-filter>

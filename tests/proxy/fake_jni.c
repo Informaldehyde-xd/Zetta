@@ -99,7 +99,7 @@ static jclass JNICALL fake_find_class(JNIEnv* env, const char* name) {
     ++fake.find_class_calls;
     snprintf(fake.class_name, sizeof fake.class_name, "%s", name);
     if (fake.find_class_fails ||
-        (fake.bridge_find_class_fails && strcmp(name, "com/zettabridge/core/ZBridge") == 0)) {
+        (fake.bridge_find_class_fails && strcmp(name, "com/ix32psl/core/ZBridge") == 0)) {
         fake.exception_pending = 1;
         return NULL;
     }
@@ -248,7 +248,7 @@ static jint run(void) {
 
 static void check_request(void) {
     CHECK(fake.getenv_version == JNI_VERSION_1_6);
-    CHECK(strcmp(fake.class_name, "com/zettabridge/core/ZBridge") == 0);
+    CHECK(strcmp(fake.class_name, "com/ix32psl/core/ZBridge") == 0);
     CHECK(strcmp(fake.method_name, "onProxyLoaded") == 0);
     CHECK(strcmp(fake.method_sig, "(Ljava/lang/String;)I") == 0);
     CHECK(strcmp(fake.string_value, proxy_path) == 0);
@@ -397,7 +397,7 @@ static void test_native_activity(void) {
     fake.boolean_result = JNI_TRUE;
     on_create((void*)0x1234, (void*)0x5678, 9);
     CHECK(fake.getenv_version == JNI_VERSION_1_6);
-    CHECK(strcmp(fake.class_name, "com/zettabridge/core/ZBridge") == 0);
+    CHECK(strcmp(fake.class_name, "com/ix32psl/core/ZBridge") == 0);
     CHECK(strcmp(fake.method_name, "onNativeActivityCreated") == 0);
     CHECK(strcmp(fake.method_sig, "(JJJLjava/lang/String;)Z") == 0);
     CHECK(fake.static_boolean_calls == 1);

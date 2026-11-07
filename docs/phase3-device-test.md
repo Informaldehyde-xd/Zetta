@@ -5,7 +5,7 @@ inside an Android app process on the OnePlus 13, next to ART.
 
 What exists after the night of 2026-09-13/14:
 - `libzbridge.so` for arm64-v8a, containing the whole core. It exports `zb_run_executable()`
-  (C) and `com.zettabridge.core.ZBridge.runExecutable()` (JNI).
+  (C) and `com.ix32psl.core.ZBridge.runExecutable()` (JNI).
 - The arm32 sysroot from the Android 17 GSI, in `sysroot/`.
 - Guest test binaries and libraries: `build/guest/`, `build/guest/lib/`, and the fixed
   Orange Roulette libs in `build/or/`.
@@ -49,14 +49,14 @@ native library and 20 MB of assets. Copy its three folders into an AndroidIDE ap
 
 - `build/t6/jniLibs` -> `app/src/main/jniLibs`
 - `build/t6/assets` -> `app/src/main/assets` (includes `zb-files.txt`, the extraction list)
-- `build/t6/java` -> `app/src/main/java`: `com.zettabridge.core.ZBridge` and
-  `com.zettabridge.core.GuestTestActivity`, compile-checked with javac against
+- `build/t6/java` -> `app/src/main/java`: `com.ix32psl.core.ZBridge` and
+  `com.ix32psl.core.GuestTestActivity`, compile-checked with javac against
   `android.jar` API 36
 
 Declare the activity in its own process and launch it:
 
 ```xml
-<activity android:name="com.zettabridge.core.GuestTestActivity" android:process=":guest" android:exported="true" />
+<activity android:name="com.ix32psl.core.GuestTestActivity" android:process=":guest" android:exported="true" />
 ```
 
 It extracts the assets to `filesDir/zb/` and runs the table below on a background thread. The
@@ -86,7 +86,7 @@ the process:
 ```
 
 ```java
-package com.zettabridge.core;
+package com.ix32psl.core;
 
 public final class ZBridge {
     static { System.loadLibrary("zbridge"); }

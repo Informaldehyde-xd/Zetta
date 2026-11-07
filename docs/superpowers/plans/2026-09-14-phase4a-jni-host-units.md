@@ -42,7 +42,7 @@
 | `CMakeLists.txt` | enable the ASM language |
 | `core/CMakeLists.txt`, `tests/host/CMakeLists.txt` | build wiring |
 
-Commands used throughout (run from the repo root `/home/Zailox/ZettaBridge`):
+Commands used throughout (run from the repo root `/home/Zailox/IX32PSL`):
 - Configure (only needed once, or after editing `project()`):
   ```
   cmake -S . -B build/host -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
@@ -1471,11 +1471,11 @@ Expected: FAIL to compile with `fatal error: 'zb/native_thunks.h' file not found
 
 Change line 2 of `CMakeLists.txt` from:
 ```cmake
-project(zettabridge LANGUAGES C CXX)
+project(ix32psl LANGUAGES C CXX)
 ```
 to:
 ```cmake
-project(zettabridge LANGUAGES C CXX ASM)
+project(ix32psl LANGUAGES C CXX ASM)
 ```
 
 - [ ] **Step 4: Write the assembly**
@@ -1752,7 +1752,7 @@ Each builds on the code above and is written with the real interfaces in hand.
     parser.
 - **4d: Android integration.**
   - `libzbproxy.so`, `ZBridge.onProxyLoaded`, `core/src/jni/loader.cpp` (dlopen, `Java_*` binding, guest `JNI_OnLoad`).
-  - Launcher class-loader changes (`com.zettabridge.core` delegation, `findLibrary` proxies).
+  - Launcher class-loader changes (`com.ix32psl.core` delegation, `findLibrary` proxies).
   - Device test T7 and the Orange Roulette smoke test (spec "Phase 4 acceptance").
   - Guest RegisterNatives calls the real RegisterNatives once per method (count 1) and stops at
     the first failure with JNI_ERR, matching ART, which keeps the methods it already bound. Only

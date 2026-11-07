@@ -1,4 +1,4 @@
-package com.zettabridge.launcher;
+package com.ix32psl.launcher;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -61,9 +61,9 @@ public final class LauncherContractsTest {
         for (String bad : new String[] {"", "/absolute", "../escape", "a/../escape", "a//b", "a\\b"}) {
             check(!PluginFiles.safeRelativePath(bad), "unsafe asset path: " + bad);
         }
-        check(PluginClassLoader.delegateToBridge("com.zettabridge.core.ZBridge"), "bridge delegation");
-        check(PluginClassLoader.delegateToBridge("com.zettabridge.core.internal.Api"), "bridge subtree");
-        check(!PluginClassLoader.delegateToBridge("com.zettabridge.launcher.LibraryActivity"),
+        check(PluginClassLoader.delegateToBridge("com.ix32psl.core.ZBridge"), "bridge delegation");
+        check(PluginClassLoader.delegateToBridge("com.ix32psl.core.internal.Api"), "bridge subtree");
+        check(!PluginClassLoader.delegateToBridge("com.ix32psl.launcher.LibraryActivity"),
                 "launcher classes stay hidden");
         check(!PluginClassLoader.delegateToBridge("com.example.Plugin"), "plugin classes stay child-first");
     }

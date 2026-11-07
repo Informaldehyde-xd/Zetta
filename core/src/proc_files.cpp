@@ -52,7 +52,7 @@ std::string cpuinfo_text() {
                       i);
         text += block;
     }
-    text += "Hardware\t: ZettaBridge\n";
+    text += "Hardware\t: IX32PSL\n";
     return text;
 }
 

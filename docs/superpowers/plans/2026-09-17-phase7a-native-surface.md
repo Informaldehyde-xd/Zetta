@@ -906,8 +906,8 @@ Expected: all commands pass.
 cd android/launcher
 ANDROID_HOME=$HOME/android-sdk ANDROID_SDK_ROOT=$HOME/android-sdk ./gradlew --no-daemon assembleDebug
 cd ../..
-cp android/launcher/app/build/outputs/apk/debug/app-debug.apk /sdcard/ZettaBridge-debug.apk
-sha256sum /sdcard/ZettaBridge-debug.apk
+cp android/launcher/app/build/outputs/apk/debug/app-debug.apk /sdcard/IX32PSL-debug.apk
+sha256sum /sdcard/IX32PSL-debug.apk
 ```
 
 - [ ] **Step 3: Ask the user for one run**

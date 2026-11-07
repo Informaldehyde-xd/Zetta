@@ -12,8 +12,8 @@ if [ ! -f "$ANDROID_JAR" ]; then
 fi
 
 javac -encoding UTF-8 -source 17 -target 17 -cp "$ANDROID_JAR" -d "$OUT" \
-    "$ROOT/android/launcher/app/src/main/java/com/zettabridge/launcher/PluginFiles.java" \
-    "$ROOT/android/launcher/app/src/main/java/com/zettabridge/launcher/PluginClassLoader.java" \
-    "$ROOT/android/launcher/app/src/main/java/com/zettabridge/launcher/PluginRecord.java" \
+    "$ROOT/android/launcher/app/src/main/java/com/ix32psl/launcher/PluginFiles.java" \
+    "$ROOT/android/launcher/app/src/main/java/com/ix32psl/launcher/PluginClassLoader.java" \
+    "$ROOT/android/launcher/app/src/main/java/com/ix32psl/launcher/PluginRecord.java" \
     "$ROOT/tests/launcher/LauncherContractsTest.java"
-java -ea -cp "$OUT:$ANDROID_JAR" com.zettabridge.launcher.LauncherContractsTest
+java -ea -cp "$OUT:$ANDROID_JAR" com.ix32psl.launcher.LauncherContractsTest

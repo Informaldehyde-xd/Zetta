@@ -58,14 +58,14 @@ Guest dex is loaded by our class loader (Phase 0). It overrides `findLibrary(nam
 - **No `DT_NEEDED` on `libzbridge.so`.** The proxy links against nothing of ours.
 - **Its `JNI_OnLoad(vm)`:**
   1. Finds its own path with `dladdr`.
-  2. Calls `com.zettabridge.core.ZBridge.onProxyLoaded(String proxyPath)` through JNI.
+  2. Calls `com.ix32psl.core.ZBridge.onProxyLoaded(String proxyPath)` through JNI.
      During `JNI_OnLoad`, ART's class-loader override is the plugin loader.
   3. Returns the JNI version reported by the guest (or `JNI_VERSION_1_6`).
 - **On failure** `onProxyLoaded` throws `UnsatisfiedLinkError`. The proxy returns
   `JNI_ERR`, so `System.loadLibrary` fails the normal way.
 
 Requirements on Phase 0 (plugin class loader):
-- **Class delegation.** Classes in `com.zettabridge.core.*` resolve through the launcher
+- **Class delegation.** Classes in `com.ix32psl.core.*` resolve through the launcher
   class loader, which already loaded `libzbridge.so`. All other classes stay isolated
   (boot parent).
 - **Library lookup.** `findLibrary` behaves as in the table above.

@@ -1,4 +1,4 @@
-# Contributing to ZettaBridge
+# Contributing to IX32PSL
 
 Issues naming a 32-bit app you want to run are the most useful thing you can send: the app name
 and version, where the APK comes from, and what happens when it starts. A runtime report from the
@@ -6,7 +6,7 @@ launcher (long-press the game, "Last run report") turns a vague failure into a f
 
 ## Licence and contributions
 
-ZettaBridge is **source-available, not open source**: see [LICENSE](LICENSE). Two licences apply
+IX32PSL is **source-available, not open source**: see [LICENSE](LICENSE). Two licences apply
 cumulatively, PolyForm Noncommercial 1.0.0 and PolyForm Perimeter 1.0.1. You may read, modify and
 share it for noncommercial purposes; you may not make money from it, and you may not provide
 others a competing product, free or paid. Commercial use needs a separate licence from the

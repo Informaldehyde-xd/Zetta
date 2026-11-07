@@ -2,7 +2,7 @@
 # Assembles everything the on-device T6 test app needs into build/t6/:
 #   build/t6/jniLibs/arm64-v8a/libzbridge.so   -> app/src/main/jniLibs/
 #   build/t6/assets/zb/...                     -> app/src/main/assets/
-#   build/t6/java/com/zettabridge/core/*.java  -> app/src/main/java/
+#   build/t6/java/com/ix32psl/core/*.java  -> app/src/main/java/
 # Prerequisites: the Android arm64 build (ninja -C build/android-arm64 zbridge),
 # tools/build_guest.sh and tools/run_guest_tests.sh (which prepares build/or/).
 set -eu

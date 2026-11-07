@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Says whether an APK is a candidate for ZettaBridge, and which entry point it uses.
+"""Says whether an APK is a candidate for IX32PSL, and which entry point it uses.
 
     tools/scan_apk.py game.apk [more.apk ...]
     tools/scan_apk.py ~/apks            # a directory is scanned recursively

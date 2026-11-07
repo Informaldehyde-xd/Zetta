@@ -20,7 +20,7 @@ std::atomic<GuestJniRuntime*> g_instance{nullptr};
 GuestJniRuntime& GuestJniRuntime::get(JNIEnv* env) {
     std::call_once(g_once, [env] {
         JavaVM* vm = nullptr;
-        if (env->GetJavaVM(&vm) != JNI_OK || vm == nullptr) env->FatalError("ZettaBridge: GetJavaVM failed");
+        if (env->GetJavaVM(&vm) != JNI_OK || vm == nullptr) env->FatalError("IX32PSL: GetJavaVM failed");
         // Process-lifetime by design: never deleted (see the class comment).
         g_instance.store(new GuestJniRuntime(vm));
     });
@@ -52,7 +52,7 @@ bool GuestJniRuntime::Engine::bind_class_loader(JniBackend::Env env, JniBackend:
 }
 
 // Throwable.toString() of the pending exception, which is cleared. ART clears it anyway after a
-// failed JNI_OnLoad, so its text only survives inside ZettaBridge's own error message.
+// failed JNI_OnLoad, so its text only survives inside IX32PSL's own error message.
 std::string GuestJniRuntime::Engine::take_pending_exception(JniBackend::Env env) {
     JNIEnv* e = E(env);
     if (e->ExceptionCheck() == JNI_FALSE) return {};

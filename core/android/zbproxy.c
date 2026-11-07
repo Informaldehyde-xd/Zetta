@@ -3,9 +3,9 @@
 // The launcher's plugin class loader returns one copy of this library per arm32 library
 // (plugins/<pkg>/proxy/lib<name>.so). Its only job is to tell the translator which copy was
 // loaded: JNI_OnLoad finds its own path with dladdr and calls
-//     static int com.zettabridge.core.ZBridge.onProxyLoaded(String proxyPath)
+//     static int com.ix32psl.core.ZBridge.onProxyLoaded(String proxyPath)
 // During JNI_OnLoad ART's class-loader override is the plugin loader, which delegates
-// com.zettabridge.core.* to the launcher. The proxy links against nothing of ours (no
+// com.ix32psl.core.* to the launcher. The proxy links against nothing of ours (no
 // libzbridge.so, no libc++): tools/check_zbproxy.py checks every Android link.
 //
 // Contract of onProxyLoaded: it returns the guest JNI version (0 means "no preference" and
@@ -28,7 +28,7 @@
 #include <android/log.h>
 #endif
 
-static const char kBridgeClass[] = "com/zettabridge/core/ZBridge";
+static const char kBridgeClass[] = "com/ix32psl/core/ZBridge";
 static const char kMethodName[] = "onProxyLoaded";
 static const char kMethodSignature[] = "(Ljava/lang/String;)I";
 static const char kActivityMethodName[] = "onNativeActivityCreated";
@@ -57,7 +57,7 @@ static int supported_version(jint version) {
 }
 
 // A guest library may call System.loadLibrary itself, straight from native code. ART then has no
-// Java caller frame, uses the boot class loader, and FindClass cannot see com.zettabridge.core.*
+// Java caller frame, uses the boot class loader, and FindClass cannot see com.ix32psl.core.*
 // ("class ... not found" and a NoClassDefFoundError that kills the app). The first load happens
 // with the plugin loader, so the class is remembered here as a global reference and reused when
 // FindClass fails. A repeated load of the same proxy is harmless: the bridge answers it from its
@@ -93,7 +93,7 @@ static jclass find_bridge(JNIEnv* env, jobject activity) {
     jmethodID load_class = (*env)->GetMethodID(
         env, loader_class, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
     if (load_class == NULL) goto done;
-    name = (*env)->NewStringUTF(env, "com.zettabridge.core.ZBridge");
+    name = (*env)->NewStringUTF(env, "com.ix32psl.core.ZBridge");
     if (name == NULL) goto done;
     bridge = (jclass)(*env)->CallObjectMethod(env, loader, load_class, name);
 

@@ -204,7 +204,7 @@ bool ProxyRuntime::activate_plugin(JniBackend::Env env, const std::string& plugi
 ProxyLoadResult ProxyRuntime::fail_locked(const std::string& key, const std::string& library, std::string detail) {
     Entry& entry = entries_[key];
     entry.state = LoadState::Failed;
-    entry.error = "ZettaBridge cannot load " + library + " (proxy " + key + "): " + detail;
+    entry.error = "IX32PSL cannot load " + library + " (proxy " + key + "): " + detail;
     last_error_ = entry.error;
     log("%s", entry.error.c_str());
     runtime_report().note_proxy_failed(library, detail);
@@ -225,7 +225,7 @@ ProxyLoadResult ProxyRuntime::on_proxy_loaded(JniBackend::Env env, const std::st
         if (entry.state == LoadState::Loaded) return {true, entry.jni_version, {}};
         if (entry.state == LoadState::Failed) return {false, 0, entry.error};
         if (entry.owner == std::this_thread::get_id()) {
-            return {false, 0, "ZettaBridge: recursive load of proxy " + key};
+            return {false, 0, "IX32PSL: recursive load of proxy " + key};
         }
         cv_.wait(lock);
     }
