@@ -17,7 +17,8 @@
 #define ZB_MEM_HC_COPY 710            /* r0 = dest, r1 = src, r2 = n; r0 = 1 when done natively, 0 when not */
 #define ZB_MEM_HC_SET 711             /* r0 = dest, r1 = byte, r2 = n; r0 = 1 when done natively, 0 when not */
 #define ZB_MEM_HC_PROBE 712           /* r0 = smallest size done natively (0 = switched off) */
-#define ZB_ZLIB_HC_LAST 712
+#define ZB_PATCH_REGISTER 713         /* r0 = table of {name, function} guest pointers, r1 = entries: functions to put into the game's import tables */
+#define ZB_ZLIB_HC_LAST 713
 
 #define ZB_ZLIB_MAGIC 0x425A5A4Eu
 

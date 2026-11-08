@@ -43,6 +43,9 @@ namespace zb {
 //                                        goes through every thread's code cache when the range holds
 //                                        memory the game ever executed from. Heap and texture memory
 //                                        no longer cost every thread an invalidation.
+//   patch_imports           (default 1)  Write the guest's faster memcpy, memset and zlib functions into the game
+//                                        libraries' import tables (the linker's symbol order alone did
+//                                        not make the game use them).
 bool option_enabled(const char* name, bool default_value);
 // A whole-number setting from the same file ("name=96"); the default when it is missing or not a number.
 int option_number(const char* name, int default_value);

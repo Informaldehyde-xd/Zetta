@@ -56,7 +56,7 @@ static void* fallback_set(void* d, int c, size_t n) {
     return d;
 }
 
-__attribute__((constructor)) static void zb_mem_init(void) {
+__attribute__((constructor(101))) static void zb_mem_init(void) {
 #ifdef ZB_TEST
     void* handle = RTLD_NEXT;
 #else
@@ -80,32 +80,61 @@ static inline int far_apart(const void* d, const void* s, size_t n) {
     return a >= b + n || b >= a + n;
 }
 
-void* memcpy(void* d, const void* s, size_t n) {
+static void* zb_memcpy_impl(void* d, const void* s, size_t n) {
     if (native_min != 0 && n >= native_min && far_apart(d, s, n) && ZB_MEM_HC(ZB_MEM_HC_COPY, d, s, n) != 0) return d;
     return real_memcpy != NULL ? real_memcpy(d, s, n) : fallback_copy(d, s, n);
 }
 
-void* memmove(void* d, const void* s, size_t n) {
+static void* zb_memmove_impl(void* d, const void* s, size_t n) {
     if (native_min != 0 && n >= native_min && ZB_MEM_HC(ZB_MEM_HC_COPY, d, s, n) != 0) return d;
     return real_memmove != NULL ? real_memmove(d, s, n) : fallback_copy(d, s, n);
 }
 
-void* memset(void* d, int c, size_t n) {
+static void* zb_memset_impl(void* d, int c, size_t n) {
     if (native_min != 0 && n >= native_min && ZB_MEM_HC(ZB_MEM_HC_SET, d, c, n) != 0) return d;
     return real_memset != NULL ? real_memset(d, c, n) : fallback_set(d, c, n);
 }
 
 /* The ARM EABI helpers the compiler calls for struct copies and clears. Note: __aeabi_memset takes
  * (dest, n, byte), unlike memset. */
-void __aeabi_memcpy(void* d, const void* s, size_t n) { memcpy(d, s, n); }
-void __aeabi_memcpy4(void* d, const void* s, size_t n) { memcpy(d, s, n); }
-void __aeabi_memcpy8(void* d, const void* s, size_t n) { memcpy(d, s, n); }
-void __aeabi_memmove(void* d, const void* s, size_t n) { memmove(d, s, n); }
-void __aeabi_memmove4(void* d, const void* s, size_t n) { memmove(d, s, n); }
-void __aeabi_memmove8(void* d, const void* s, size_t n) { memmove(d, s, n); }
-void __aeabi_memset(void* d, size_t n, int c) { memset(d, c, n); }
-void __aeabi_memset4(void* d, size_t n, int c) { memset(d, c, n); }
-void __aeabi_memset8(void* d, size_t n, int c) { memset(d, c, n); }
-void __aeabi_memclr(void* d, size_t n) { memset(d, 0, n); }
-void __aeabi_memclr4(void* d, size_t n) { memset(d, 0, n); }
-void __aeabi_memclr8(void* d, size_t n) { memset(d, 0, n); }
+static void zb_aeabi_memcpy(void* d, const void* s, size_t n) { zb_memcpy_impl(d, s, n); }
+static void zb_aeabi_memmove(void* d, const void* s, size_t n) { zb_memmove_impl(d, s, n); }
+static void zb_aeabi_memset(void* d, size_t n, int c) { zb_memset_impl(d, c, n); }
+static void zb_aeabi_memclr(void* d, size_t n) { zb_memset_impl(d, 0, n); }
+
+/* The public names, for the case where the linker does prefer this library's symbols ... */
+void* memcpy(void* d, const void* s, size_t n) { return zb_memcpy_impl(d, s, n); }
+void* memmove(void* d, const void* s, size_t n) { return zb_memmove_impl(d, s, n); }
+void* memset(void* d, int c, size_t n) { return zb_memset_impl(d, c, n); }
+void __aeabi_memcpy(void* d, const void* s, size_t n) { zb_aeabi_memcpy(d, s, n); }
+void __aeabi_memcpy4(void* d, const void* s, size_t n) { zb_aeabi_memcpy(d, s, n); }
+void __aeabi_memcpy8(void* d, const void* s, size_t n) { zb_aeabi_memcpy(d, s, n); }
+void __aeabi_memmove(void* d, const void* s, size_t n) { zb_aeabi_memmove(d, s, n); }
+void __aeabi_memmove4(void* d, const void* s, size_t n) { zb_aeabi_memmove(d, s, n); }
+void __aeabi_memmove8(void* d, const void* s, size_t n) { zb_aeabi_memmove(d, s, n); }
+void __aeabi_memset(void* d, size_t n, int c) { zb_aeabi_memset(d, n, c); }
+void __aeabi_memset4(void* d, size_t n, int c) { zb_aeabi_memset(d, n, c); }
+void __aeabi_memset8(void* d, size_t n, int c) { zb_aeabi_memset(d, n, c); }
+void __aeabi_memclr(void* d, size_t n) { zb_aeabi_memclr(d, n); }
+void __aeabi_memclr4(void* d, size_t n) { zb_aeabi_memclr(d, n); }
+void __aeabi_memclr8(void* d, size_t n) { zb_aeabi_memclr(d, n); }
+
+/* ... and, because that preference is not reliable, the host patches these functions into the import
+ * tables of the game's libraries itself (see Process::patch_imports). */
+struct zb_override {
+    const char* name;
+    void* function;
+};
+static const struct zb_override zb_mem_overrides[] = {
+    {"memcpy", (void*)zb_memcpy_impl},          {"memmove", (void*)zb_memmove_impl},          {"memset", (void*)zb_memset_impl},
+    {"__aeabi_memcpy", (void*)zb_aeabi_memcpy}, {"__aeabi_memcpy4", (void*)zb_aeabi_memcpy}, {"__aeabi_memcpy8", (void*)zb_aeabi_memcpy},
+    {"__aeabi_memmove", (void*)zb_aeabi_memmove}, {"__aeabi_memmove4", (void*)zb_aeabi_memmove}, {"__aeabi_memmove8", (void*)zb_aeabi_memmove},
+    {"__aeabi_memset", (void*)zb_aeabi_memset}, {"__aeabi_memset4", (void*)zb_aeabi_memset}, {"__aeabi_memset8", (void*)zb_aeabi_memset},
+    {"__aeabi_memclr", (void*)zb_aeabi_memclr}, {"__aeabi_memclr4", (void*)zb_aeabi_memclr}, {"__aeabi_memclr8", (void*)zb_aeabi_memclr},
+};
+
+__attribute__((constructor(102))) static void zb_mem_register(void) {
+#ifndef ZB_TEST
+    if (native_min != 0) ZB_MEM_HC(ZB_PATCH_REGISTER, zb_mem_overrides, sizeof zb_mem_overrides / sizeof zb_mem_overrides[0], 0);
+#endif
+}

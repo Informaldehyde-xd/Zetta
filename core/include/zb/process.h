@@ -153,6 +153,9 @@ public:
 
     // Drops translated code for the range in every thread.
     void invalidate(std::uint32_t addr, std::uint32_t len);
+    // Points the game libraries' imports of memcpy, memset, inflate, ... at the faster functions the guest
+    // registered (see import_patch.h). Called about once a second from a helper thread.
+    void patch_imports();
     // True the first time `key` is seen; used to log each unsupported case once.
     bool first_time(std::uint64_t key);
 

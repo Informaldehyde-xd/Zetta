@@ -821,6 +821,13 @@ void Process::install_terminate_reporter() {
     // name the library an address belongs to.
     reporter_process = this;
     start_perf_hint();  // asks Android to speed up the hot threads (Android 13 and later)
+    std::thread([this] {  // see Process::patch_imports
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            if (exiting_) return;
+            patch_imports();
+        }
+    }).detach();
     std::call_once(once, [] {
         previous = std::set_terminate([] {
             if (GuestThread* thread = Process::current_thread()) {
@@ -1258,8 +1265,10 @@ void Process::install_terminate_reporter() {
                     ft[0].tid = frame_counter.last_tid.load(std::memory_order_relaxed);
                     auto find_thread = [&](std::int32_t tid) -> GuestThread* {
                         if (tid == 0) return nullptr;
-                        for (GuestThread* t : process->threads_) if (t->tid == tid) return t;
+                        // a borrower (a Java thread running guest code) has the id of its parked carrier and is
+                        // the one that really runs, so it comes first
                         for (GuestThread* t : process->borrowers_) if (t->tid == tid) return t;
+                        for (GuestThread* t : process->threads_) if (t->tid == tid) return t;
                         return nullptr;
                     };
                     // the busiest guest thread by CPU (the meter list is refreshed twice a second); a thread

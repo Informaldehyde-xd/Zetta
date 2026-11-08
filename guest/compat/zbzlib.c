@@ -62,7 +62,7 @@ static void take_results(z_streamp strm, ZbCtx* ctx) {
     strm->msg = ctx->call.msg[0] != 0 ? ctx->call.msg : Z_NULL;
 }
 
-int inflateInit2_(z_streamp strm, int windowBits, const char* version, int stream_size) {
+int zb_inflateInit2_(z_streamp strm, int windowBits, const char* version, int stream_size) {
     if (native()) {
         if (version == Z_NULL || version[0] != ZLIB_VERSION[0] || stream_size != (int)sizeof(z_stream))
             return Z_VERSION_ERROR;
@@ -89,11 +89,11 @@ int inflateInit2_(z_streamp strm, int windowBits, const char* version, int strea
     return fn != NULL ? fn(strm, windowBits, version, stream_size) : Z_STREAM_ERROR;
 }
 
-int inflateInit_(z_streamp strm, const char* version, int stream_size) {
-    return inflateInit2_(strm, 15, version, stream_size);
+int zb_inflateInit_(z_streamp strm, const char* version, int stream_size) {
+    return zb_inflateInit2_(strm, 15, version, stream_size);
 }
 
-int inflate(z_streamp strm, int flush) {
+int zb_inflate(z_streamp strm, int flush) {
     ZbCtx* ctx = ours(strm);
     if (ctx == NULL) {
         int (*fn)(z_streamp, int) = (int (*)(z_streamp, int))real("inflate");
@@ -114,7 +114,7 @@ int inflate(z_streamp strm, int flush) {
     return ctx->call.ret;
 }
 
-int inflateReset(z_streamp strm) {
+int zb_inflateReset(z_streamp strm) {
     ZbCtx* ctx = ours(strm);
     if (ctx == NULL) {
         int (*fn)(z_streamp) = (int (*)(z_streamp))real("inflateReset");
@@ -127,7 +127,7 @@ int inflateReset(z_streamp strm) {
     return ctx->call.ret;
 }
 
-int inflateEnd(z_streamp strm) {
+int zb_inflateEnd(z_streamp strm) {
     ZbCtx* ctx = ours(strm);
     if (ctx == NULL) {
         int (*fn)(z_streamp) = (int (*)(z_streamp))real("inflateEnd");
@@ -142,7 +142,7 @@ int inflateEnd(z_streamp strm) {
     return result;
 }
 
-int inflateSetDictionary(z_streamp strm, const Bytef* dictionary, uInt dictLength) {
+int zb_inflateSetDictionary(z_streamp strm, const Bytef* dictionary, uInt dictLength) {
     ZbCtx* ctx = ours(strm);
     if (ctx == NULL) {
         int (*fn)(z_streamp, const Bytef*, uInt) = (int (*)(z_streamp, const Bytef*, uInt))real("inflateSetDictionary");
@@ -156,29 +156,50 @@ int inflateSetDictionary(z_streamp strm, const Bytef* dictionary, uInt dictLengt
     return ctx->call.ret;
 }
 
-int uncompress(Bytef* dest, uLongf* destLen, const Bytef* source, uLong sourceLen) {
+int zb_uncompress(Bytef* dest, uLongf* destLen, const Bytef* source, uLong sourceLen) {
     if (native()) return (int)ZB_HC(ZB_ZLIB_HC_UNCOMPRESS, dest, destLen, source, sourceLen);
     int (*fn)(Bytef*, uLongf*, const Bytef*, uLong) = (int (*)(Bytef*, uLongf*, const Bytef*, uLong))real("uncompress");
     return fn != NULL ? fn(dest, destLen, source, sourceLen) : Z_STREAM_ERROR;
 }
 
-uLong crc32(uLong crc, const Bytef* buf, uInt len) {
-    if (native()) return (uLong)ZB_HC(ZB_ZLIB_HC_CRC32, crc, buf, len, 0);
-    uLong (*fn)(uLong, const Bytef*, uInt) = (uLong (*)(uLong, const Bytef*, uInt))real("crc32");
+/* crc32 and adler32 of a short buffer are quicker as translated code than as a host call. */
+#define ZB_CHECKSUM_NATIVE_MIN 4096
+
+uLong zb_crc32(uLong crc, const Bytef* buf, uInt len) {
+    static uLong (*fn)(uLong, const Bytef*, uInt);
+    if (native() && len >= ZB_CHECKSUM_NATIVE_MIN) return (uLong)ZB_HC(ZB_ZLIB_HC_CRC32, crc, buf, len, 0);
+    if (fn == NULL) fn = (uLong (*)(uLong, const Bytef*, uInt))real("crc32");
     return fn != NULL ? fn(crc, buf, len) : 0;
 }
 
-uLong adler32(uLong adler, const Bytef* buf, uInt len) {
-    if (native()) return (uLong)ZB_HC(ZB_ZLIB_HC_ADLER32, adler, buf, len, 0);
-    uLong (*fn)(uLong, const Bytef*, uInt) = (uLong (*)(uLong, const Bytef*, uInt))real("adler32");
+uLong zb_adler32(uLong adler, const Bytef* buf, uInt len) {
+    static uLong (*fn)(uLong, const Bytef*, uInt);
+    if (native() && len >= ZB_CHECKSUM_NATIVE_MIN) return (uLong)ZB_HC(ZB_ZLIB_HC_ADLER32, adler, buf, len, 0);
+    if (fn == NULL) fn = (uLong (*)(uLong, const Bytef*, uInt))real("adler32");
     return fn != NULL ? fn(adler, buf, len) : 1;
+}
+
+/* The functions the host puts into the game's import tables (see Process::patch_imports). */
+struct zb_override {
+    const char* name;
+    void* function;
+};
+static const struct zb_override zb_zlib_overrides[] = {
+    {"inflateInit_", (void*)zb_inflateInit_},   {"inflateInit2_", (void*)zb_inflateInit2_},
+    {"inflate", (void*)zb_inflate},             {"inflateReset", (void*)zb_inflateReset},
+    {"inflateEnd", (void*)zb_inflateEnd},       {"inflateSetDictionary", (void*)zb_inflateSetDictionary},
+    {"uncompress", (void*)zb_uncompress},       {"crc32", (void*)zb_crc32},
+    {"adler32", (void*)zb_adler32},
+};
+
+__attribute__((constructor(102))) static void zb_zlib_register(void) {
+    if (native()) ZB_HC(ZB_PATCH_REGISTER, zb_zlib_overrides, sizeof zb_zlib_overrides / sizeof zb_zlib_overrides[0], 0, 0);
 }
 
 /* The guest's allocator (scudo) hands freed memory back to the system on a short timer, and the
  * game then touches it again: a loading screen of one game showed 1.1 million page faults in 9
  * seconds. mallopt(M_DECAY_TIME, 1) switches the automatic release to its least eager setting.
  * Switch: malloc_keep_memory=0 in zb-options.txt. */
-extern int mallopt(int __op, int __value);
 #ifndef M_DECAY_TIME
 #define M_DECAY_TIME (-100)
 #endif

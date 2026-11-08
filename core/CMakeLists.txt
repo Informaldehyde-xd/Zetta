@@ -26,6 +26,8 @@ add_library(zbcore STATIC
     src/diagnostics.cpp
     src/profile_extra.cpp
     src/perf_hint.cpp
+    src/import_patch.cpp
+    src/process_patch.cpp
     src/guest_symbols.cpp
     src/guest_log.cpp
     src/initial_stack.cpp

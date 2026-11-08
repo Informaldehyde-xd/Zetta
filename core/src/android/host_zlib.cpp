@@ -2,15 +2,18 @@
 
 #include <zlib.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <string>
 #include <mutex>
 #include <unordered_map>
 
 #include "zb/guest_memory.h"
+#include "zb/import_patch.h"
 #include "zb/library_runtime.h"
 #include "zb/log.h"
 #include "zb/options.h"
@@ -50,6 +53,31 @@ bool HostZlib::handle_host_call(std::uint32_t index, GuestThread& thread) {
             log("native zlib is %s", native_enabled() ? "ON" : "OFF (native_zlib=0)");
         }
         regs[0] = native_enabled() ? 1u : 0u;
+        return true;
+    }
+
+    if (index == ZB_PATCH_REGISTER) {
+        // The guest hands over a table of {name pointer, function pointer} pairs (8 bytes each).
+        const std::uint32_t table = regs[0];
+        const std::uint32_t count = std::min<std::uint32_t>(regs[1], 64);
+        std::unordered_map<std::string, std::uint32_t> entries;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const std::uint8_t* pair = memory.host_ptr(table + 8 * i, 8, kPageRead);
+            if (pair == nullptr) break;
+            std::uint32_t name_pointer, function;
+            std::memcpy(&name_pointer, pair, 4);
+            std::memcpy(&function, pair + 4, 4);
+            std::string name;
+            for (std::uint32_t k = 0; k < 40; ++k) {
+                const std::uint8_t* c = memory.host_ptr(name_pointer + k, 1, kPageRead);
+                if (c == nullptr || *c == 0) break;
+                name.push_back(static_cast<char>(*c));
+            }
+            if (!name.empty() && function != 0) entries[name] = function;
+        }
+        register_patch_targets(entries);
+        log("import patch: the guest registered %zu functions", entries.size());
+        regs[0] = static_cast<std::uint32_t>(entries.size());
         return true;
     }
 
