@@ -174,6 +174,11 @@ JNIEXPORT jstring JNICALL Java_com_ix32psl_core_ZBridge_lastLoadError(JNIEnv* en
 // changes. Called once per :guest process, before plugin code runs, so a process that dies
 // silently still leaves its last state on disk (OxygenOS drops our logcat output).
 JNIEXPORT jboolean JNICALL Java_com_ix32psl_core_ZBridge_setReportFile(JNIEnv* env, jclass, jstring path) {
+  // --- GRAB THE JAVAVM FOR ASSET EXTRACTION ---
+    JavaVM* vm = nullptr;
+    if (env->GetJavaVM(&vm) == JNI_OK) {
+        zb::set_java_vm(vm);
+    }
     const std::optional<std::string> file = to_string(env, path);
     if (!file) {
         throw_new(env, "java/lang/NullPointerException", "path");
