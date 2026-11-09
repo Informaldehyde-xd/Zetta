@@ -30,28 +30,27 @@ final class AspectLetterbox {
     private AspectLetterbox() {}
 
     static void apply(Activity activity) {
-        float wanted = readRatio(activity.getPackageName());
-        if (wanted <= 0f) wanted = FixedSurface.letterboxRatio(activity.getPackageName());  // a fixed surface size is letterboxed to its own shape
-        final float ratio = wanted;
-        if (ratio <= 0f) return;
-        final View content = activity.findViewById(android.R.id.content);
-        if (!(content instanceof ViewGroup)) return;
-        activity.getWindow().setBackgroundDrawable(new ColorDrawable(Color.BLACK));
-        content.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
-            final int width = right - left;
-            final int height = bottom - top;
-            if (width <= 0 || height <= 0) return;
-            // Landscape wants width:height = ratio, portrait the inverse.
-            final float wanted = width >= height ? ratio : 1f / ratio;
-            int padX = 0;
-            int padY = 0;
-            if ((float) width / height > wanted) padX = Math.round((width - height * wanted) / 2f);
-            else padY = Math.round((height - width / wanted) / 2f);
-            if (v.getPaddingLeft() != padX || v.getPaddingTop() != padY) v.setPadding(padX, padY, padX, padY);
-        });
-        content.requestLayout();
-        Log.i(TAG, "aspect ratio " + ratio + " applied");
-    }
+    float ratioValue = readRatio(activity.getPackageName());
+    if (ratioValue <= 0f) ratioValue = FixedSurface.letterboxRatio(activity.getPackageName());
+    final float ratio = ratioValue;
+    if (ratio <= 0f) return;
+    final View content = activity.findViewById(android.R.id.content);
+    if (!(content instanceof ViewGroup)) return;
+    activity.getWindow().setBackgroundDrawable(new ColorDrawable(Color.BLACK));
+    content.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+        final int width = right - left;
+        final int height = bottom - top;
+        if (width <= 0 || height <= 0) return;
+        final float wanted = width >= height ? ratio : 1f / ratio;
+        int padX = 0;
+        int padY = 0;
+        if ((float) width / height > wanted) padX = Math.round((width - height * wanted) / 2f);
+        else padY = Math.round((height - width / wanted) / 2f);
+        if (v.getPaddingLeft() != padX || v.getPaddingTop() != padY) v.setPadding(padX, padY, padX, padY);
+    });
+    content.requestLayout();
+    Log.i(TAG, "aspect ratio " + ratio + " applied");
+}
 
     /** zb-aspect.txt in the launcher's external files folder, wherever this phone puts it. */
     private static File settingsFile() {
