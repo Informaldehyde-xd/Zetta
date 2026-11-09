@@ -30,7 +30,9 @@ final class AspectLetterbox {
     private AspectLetterbox() {}
 
     static void apply(Activity activity) {
-        final float ratio = readRatio(activity.getPackageName());
+        float wanted = readRatio(activity.getPackageName());
+        if (wanted <= 0f) wanted = FixedSurface.letterboxRatio(activity.getPackageName());  // a fixed surface size is letterboxed to its own shape
+        final float ratio = wanted;
         if (ratio <= 0f) return;
         final View content = activity.findViewById(android.R.id.content);
         if (!(content instanceof ViewGroup)) return;

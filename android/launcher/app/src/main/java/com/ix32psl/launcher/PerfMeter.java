@@ -56,7 +56,7 @@ final class PerfMeter {
                 public void run() {
                     if (activity.isFinishing() || activity.isDestroyed()) return;
                     try {
-                        update(view);
+                        update(view, activity);
                     } catch (RuntimeException e) {
                         Log.w(TAG, "fps meter: " + e);
                     }
@@ -68,7 +68,7 @@ final class PerfMeter {
         }
     }
 
-    private static void update(TextView view) {
+    private static void update(TextView view, Activity activity) {
         File dir = Diagnostics.externalFilesDir();
         File file = dir != null ? new File(dir, "zb-meter.txt") : null;
         if (file == null || !file.isFile() || System.currentTimeMillis() - file.lastModified() > STALE_MS) {
@@ -80,7 +80,8 @@ final class PerfMeter {
             view.setVisibility(View.GONE);
             return;
         }
-        view.setText(text);
+        final String surface = FixedSurface.describe(activity);
+        view.setText(surface != null ? text + "\n" + surface : text);
         view.setVisibility(View.VISIBLE);
     }
 

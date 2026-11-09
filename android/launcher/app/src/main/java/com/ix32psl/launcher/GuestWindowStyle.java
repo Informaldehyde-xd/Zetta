@@ -49,6 +49,11 @@ final class GuestWindowStyle {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         PerfMeter.attach(activity);  // debug build only: FPS and CPU readout
         try {
+            FixedSurface.apply(activity);  // zb-screen.txt: fixed surface size and scaled touches
+        } catch (RuntimeException e) {
+            Log.w("zb-launcher", "fixed surface: " + e);
+        }
+        try {
             AspectLetterbox.apply(activity);
         } catch (RuntimeException e) {
             Log.w(TAG, "cannot apply the aspect ratio setting: " + e);
