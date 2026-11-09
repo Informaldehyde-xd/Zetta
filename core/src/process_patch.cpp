@@ -22,9 +22,19 @@ namespace zb {
 // walked in full on its first three passes (its relocations may still be in progress), after that its
 // slots are only re-checked. Switch: patch_imports=0 in zb-options.txt.
 void Process::patch_imports() {
-    static const bool enabled = option_enabled("patch_imports", true);
+    // Off by default: the first phone test of this patching came with a silent game and a lower frame rate, so
+    // it is opt-in until it is shown to be safe. patch_imports=1 turns it on; patch_mem=0 / patch_zlib=0 then
+    // leave out the memcpy-family or the zlib functions, so a fault can be narrowed down.
+    static const bool enabled = option_enabled("patch_imports", false);
     if (!enabled) return;
-    const std::unordered_map<std::string, std::uint32_t> targets = patch_targets();
+    static const bool with_mem = option_enabled("patch_mem", true);
+    static const bool with_zlib = option_enabled("patch_zlib", true);
+    std::unordered_map<std::string, std::uint32_t> targets = patch_targets();
+    for (auto it = targets.begin(); it != targets.end();) {
+        const bool is_mem = it->first.compare(0, 3, "mem") == 0 || it->first.compare(0, 11, "__aeabi_mem") == 0;
+        if ((is_mem && !with_mem) || (!is_mem && !with_zlib)) it = targets.erase(it);
+        else ++it;
+    }
     if (targets.empty()) return;
 
     struct LibraryState {
