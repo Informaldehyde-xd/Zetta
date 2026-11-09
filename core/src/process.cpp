@@ -272,7 +272,11 @@ void Process::invalidate(std::uint32_t addr, std::uint32_t len) {
     // Memory that no instruction was ever fetched from holds no translated code: nothing to throw away.
     // (invalidate_only_code=0 in zb-options.txt goes back to flushing every range.)
     static const bool only_code = option_enabled("invalidate_only_code", true);
-    if (only_code && !code_in_range(addr, len)) return;
+    if (only_code && !code_in_range(addr, len)) {
+        note_invalidation(true);
+        return;
+    }
+    note_invalidation(false);
     std::lock_guard<std::mutex> lock(threads_mutex_);
     for (GuestThread* t : threads_) t->invalidate(addr, len);
     for (GuestThread* t : borrowers_) t->invalidate(addr, len);
@@ -1118,6 +1122,7 @@ void Process::install_terminate_reporter() {
             std::uint64_t meter_seen_frames = meter_last_frames;
             auto meter_frame_time = meter_last_time;
             double meter_worst_ms = 0;
+            TranslationCounters meter_last_counters = translation_counters();
             unsigned long meter_last_process_ticks = 0;
             std::unordered_map<std::int32_t, unsigned long> meter_last_thread_ticks;
             // user + system ticks from a /proc stat line; the name sits between the first '(' and the last ')'
@@ -1203,6 +1208,18 @@ void Process::install_terminate_reporter() {
                         std::snprintf(line, sizeof line, "CPU %.0f%% (100 = one core)  RAM %lu MB\n", cpu,
                                       ram_pages * static_cast<unsigned long>(sysconf(_SC_PAGESIZE)) / (1024 * 1024));
                         text += line;
+                        {
+                            // translation work since the last tick: instructions handed to the translator per second,
+                            // code flushes per second (and how many more were skipped as holding no code)
+                            const TranslationCounters now_counters = translation_counters();
+                            std::snprintf(line, sizeof line, "JIT %.0f instr/s  flushes %.0f/s (+%.0f skipped)\n",
+                                          (now_counters.fetched - meter_last_counters.fetched) / meter_seconds,
+                                          ((now_counters.invalidations - now_counters.skipped) -
+                                           (meter_last_counters.invalidations - meter_last_counters.skipped)) / meter_seconds,
+                                          (now_counters.skipped - meter_last_counters.skipped) / meter_seconds);
+                            text += line;
+                            meter_last_counters = now_counters;
+                        }
                         for (std::size_t i = 0; i < busy.size() && i < 3; ++i) {
                             std::snprintf(line, sizeof line, "%.14s %.0f%%%s", busy[i].second.c_str(), busy[i].first,
                                           i + 1 < busy.size() && i < 2 ? "  " : "");
