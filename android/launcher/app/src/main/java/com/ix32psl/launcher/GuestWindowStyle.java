@@ -54,6 +54,11 @@ final class GuestWindowStyle {
             Log.w("zb-launcher", "fixed surface: " + e);
         }
         try {
+            ExactWindow.apply(activity);  // zb-options.txt window_width/window_height: centred exact-size screen
+        } catch (RuntimeException e) {
+            Log.w("zb-launcher", "exact window: " + e);
+        }
+        try {
             AspectLetterbox.apply(activity);
         } catch (RuntimeException e) {
             Log.w(TAG, "cannot apply the aspect ratio setting: " + e);
