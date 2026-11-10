@@ -1,0 +1,148 @@
+diff --git a/src/dynarmic/backend/arm64/a32_address_space.cpp b/src/dynarmic/backend/arm64/a32_address_space.cpp
+index 673dba0..bfb8ff9 100644
+--- a/src/dynarmic/backend/arm64/a32_address_space.cpp
++++ b/src/dynarmic/backend/arm64/a32_address_space.cpp
+@@ -318,6 +318,25 @@ void A32AddressSpace::EmitPrelude() {
+             code.B(LE, return_from_run_code);
+         }
+ 
++        oaknut::Label l_table, slow_dispatch;
++        const bool fast_dispatch_enabled = conf.HasOptimization(OptimizationFlag::FastDispatch);
++        if (fast_dispatch_enabled) {
++            // Assembly dispatcher: look the guest location (pc | upper_location_descriptor << 32) up in
++            // the direct-mapped table; only a miss calls into C++.
++            static_assert(offsetof(A32JitState, regs) + 16 * sizeof(u32) == offsetof(A32JitState, upper_location_descriptor));
++            code.LDUR(X0, Xstate, offsetof(A32JitState, regs) + 15 * sizeof(u32));
++            code.LDR(Xscratch0, l_table);
++            code.LSR(X1, X0, 1);
++            code.EOR(X1, X1, X0, LSR, 14);
++            code.AND(X1, X1, FastDispatchCount - 1);
++            code.ADD(Xscratch0, Xscratch0, X1, LSL, 4);
++            code.LDP(Xscratch1, X2, Xscratch0);
++            code.CMP(Xscratch1, X0);
++            code.B(NE, slow_dispatch);
++            code.BR(X2);
++        }
++
++        code.l(slow_dispatch);
+         code.LDR(X0, l_this);
+         code.MOV(X1, Xstate);
+         code.LDR(Xscratch0, l_addr);
+@@ -325,7 +344,12 @@ void A32AddressSpace::EmitPrelude() {
+         code.BR(X0);
+ 
+         const auto fn = [](A32AddressSpace& self, A32JitState& context) -> CodePtr {
+-            return self.GetOrEmit(context.GetLocationDescriptor());
++            const IR::LocationDescriptor descriptor = context.GetLocationDescriptor();
++            const CodePtr code_ptr = self.GetOrEmit(descriptor);
++            if (self.conf.HasOptimization(OptimizationFlag::FastDispatch)) {
++                self.FastDispatchFill(descriptor, code_ptr);
++            }
++            return code_ptr;
+         };
+ 
+         code.align(8);
+@@ -333,6 +357,8 @@ void A32AddressSpace::EmitPrelude() {
+         code.dx(mcl::bit_cast<u64>(this));
+         code.l(l_addr);
+         code.dx(mcl::bit_cast<u64>(Common::FptrCast(fn)));
++        code.l(l_table);
++        code.dx(mcl::bit_cast<u64>(fast_dispatch.get()));
+     }
+ 
+     prelude_info.return_from_run_code = code.xptr<void*>();
+diff --git a/src/dynarmic/backend/arm64/address_space.cpp b/src/dynarmic/backend/arm64/address_space.cpp
+index 2c7ae77..25dfa08 100644
+--- a/src/dynarmic/backend/arm64/address_space.cpp
++++ b/src/dynarmic/backend/arm64/address_space.cpp
+@@ -27,6 +27,9 @@ AddressSpace::AddressSpace(size_t code_cache_size)
+         , fastmem_manager(exception_handler) {
+     ASSERT_MSG(code_cache_size <= 128 * 1024 * 1024, "code_cache_size > 128 MiB not currently supported");
+ 
++    fast_dispatch = std::make_unique<FastDispatchEntry[]>(FastDispatchCount);
++    FastDispatchClear();
++
+     exception_handler.Register(mem, code_cache_size);
+     exception_handler.SetFastmemCallback([this](u64 host_pc) {
+         return FastmemCallback(host_pc);
+@@ -35,6 +38,27 @@ AddressSpace::AddressSpace(size_t code_cache_size)
+ 
+ AddressSpace::~AddressSpace() = default;
+ 
++void AddressSpace::FastDispatchFill(IR::LocationDescriptor descriptor, CodePtr code_ptr) {
++    FastDispatchEntry& entry = fast_dispatch[FastDispatchIndex(descriptor.Value())];
++    entry.key = descriptor.Value();
++    entry.code = mcl::bit_cast<u64>(code_ptr);
++}
++
++void AddressSpace::FastDispatchInvalidate(IR::LocationDescriptor descriptor) {
++    FastDispatchEntry& entry = fast_dispatch[FastDispatchIndex(descriptor.Value())];
++    if (entry.key == descriptor.Value()) {
++        entry.key = FastDispatchEmptyKey;
++        entry.code = 0;
++    }
++}
++
++void AddressSpace::FastDispatchClear() {
++    for (size_t i = 0; i < FastDispatchCount; i++) {
++        fast_dispatch[i].key = FastDispatchEmptyKey;
++        fast_dispatch[i].code = 0;
++    }
++}
++
+ CodePtr AddressSpace::Get(IR::LocationDescriptor descriptor) {
+     if (const auto iter = block_entries.find(descriptor); iter != block_entries.end()) {
+         return iter->second;
+@@ -74,6 +98,8 @@ void AddressSpace::InvalidateBasicBlocks(const tsl::robin_set<IR::LocationDescri
+     UnprotectCodeMemory();
+ 
+     for (const auto& descriptor : descriptors) {
++        FastDispatchInvalidate(descriptor);
++
+         const auto iter = block_entries.find(descriptor);
+         if (iter == block_entries.end()) {
+             continue;
+@@ -90,6 +116,7 @@ void AddressSpace::InvalidateBasicBlocks(const tsl::robin_set<IR::LocationDescri
+ }
+ 
+ void AddressSpace::ClearCache() {
++    FastDispatchClear();
+     block_entries.clear();
+     reverse_block_entries.clear();
+     block_infos.clear();
+diff --git a/src/dynarmic/backend/arm64/address_space.h b/src/dynarmic/backend/arm64/address_space.h
+index 835566b..bd30744 100644
+--- a/src/dynarmic/backend/arm64/address_space.h
++++ b/src/dynarmic/backend/arm64/address_space.h
+@@ -6,6 +6,7 @@
+ #pragma once
+ 
+ #include <map>
++#include <memory>
+ #include <optional>
+ 
+ #include <mcl/stdint.hpp>
+@@ -80,6 +81,23 @@ protected:
+     tsl::robin_map<CodePtr, EmittedBlockInfo> block_infos;
+     tsl::robin_map<IR::LocationDescriptor, tsl::robin_set<CodePtr>> block_references;
+ 
++    // Fast dispatch (OptimizationFlag::FastDispatch): a direct-mapped table in front of block_entries.
++    // The assembly dispatcher in the prelude looks the guest location up here; on a miss it calls the
++    // C++ dispatcher, which fills the entry. Entries are removed when their block is invalidated.
++    struct FastDispatchEntry {
++        u64 key;
++        u64 code;
++    };
++    static constexpr size_t FastDispatchCount = 8192;  // power of two
++    static constexpr u64 FastDispatchEmptyKey = ~u64(0);
++    static size_t FastDispatchIndex(u64 key) {
++        return static_cast<size_t>((key >> 1) ^ (key >> 14)) & (FastDispatchCount - 1);
++    }
++    void FastDispatchFill(IR::LocationDescriptor descriptor, CodePtr code);
++    void FastDispatchInvalidate(IR::LocationDescriptor descriptor);
++    void FastDispatchClear();
++    std::unique_ptr<FastDispatchEntry[]> fast_dispatch;
++
+     ExceptionHandler exception_handler;
+     FastmemManager fastmem_manager;
+ 

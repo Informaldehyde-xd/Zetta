@@ -246,6 +246,8 @@ GuestThread::GuestThread(GuestMemory& mem, Dynarmic::ExclusiveMonitor* monitor, 
         if (nan) cfg.optimizations |= Dynarmic::OptimizationFlag::Unsafe_InaccurateNaN;
     }
     if (tuning("fast_exclusive")) cfg.fastmem_exclusive_access = true;
+    // The assembly dispatcher (third_party/patches/dynarmic-0003) is on by default; this turns it off.
+    if (tuning("no_fast_dispatch")) cfg.optimizations &= ~Dynarmic::OptimizationFlag::FastDispatch;
     static std::once_flag logged;
     std::call_once(logged, [] {
         log("tuning: little_endian=%d fast_fp=%d fp_standard=%d fp_estimate=%d fp_fma=%d fp_nan=%d fast_exclusive=%d",
