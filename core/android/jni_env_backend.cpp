@@ -30,6 +30,7 @@ namespace {
 std::atomic<jmethodID> g_screen_dpi_method{nullptr};
 
 std::atomic<jmethodID> g_display_get_width{nullptr};
+std::atomic<jmethodID> g_swap_egl_buffers{nullptr};  // Gameloft: Java swaps EGL when asked by the guest
 std::atomic<jmethodID> g_display_get_height{nullptr};
 std::atomic<jclass> g_display_class{nullptr};
 float read_dpi_override() {
@@ -543,6 +544,8 @@ JniBackend::Id JniEnvBackend::get_method_id(Env env, Ref cls, const char* name, 
     if (!is_static && method != nullptr && name != nullptr && signature != nullptr) {
         if (std::strcmp(name, "getScreenDPI") == 0 && std::strcmp(signature, "()F") == 0) {
             g_screen_dpi_method.store(method);
+        } else if (std::strcmp(name, "swapEGLBuffers") == 0 && std::strcmp(signature, "()V") == 0) {
+            g_swap_egl_buffers.store(method, std::memory_order_relaxed);
         } else if (std::strcmp(name, "getWidth") == 0 && std::strcmp(signature, "()I") == 0) {
             g_display_get_width.store(method, std::memory_order_relaxed);
         } else if (std::strcmp(name, "getHeight") == 0 && std::strcmp(signature, "()I") == 0) {
@@ -628,6 +631,11 @@ JValue JniEnvBackend::call_method(Env env, JniCallKind kind, char type, Ref obj,
     const auto* a = reinterpret_cast<const jvalue*>(args);
     const jmethodID m = M(method);
     JValue out{};
+
+    // FBO screen scaler: the guest asks Java to swap the surface; scale the picture onto it first.
+    if (m != nullptr && m == g_swap_egl_buffers.load(std::memory_order_relaxed) && fbo_scaler_enabled()) {
+        if (fbo_scaler_hooks().present != nullptr) fbo_scaler_hooks().present(nullptr);
+    }
 
     // --- SPOOF DISPLAY SIZE FOR GAMELOFT GLITCH ENGINE ---
     if (type == 'I' && m != nullptr && (m == g_display_get_width.load(std::memory_order_relaxed) || m == g_display_get_height.load(std::memory_order_relaxed))) {

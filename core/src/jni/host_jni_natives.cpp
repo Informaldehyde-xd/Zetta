@@ -5,6 +5,7 @@
 #include <cstring>
 #include <string_view>
 
+#include "zb/fbo_scaler.h"
 #include "zb/jni_shorty.h"
 #include "zb/log.h"
 #include "zb/runtime_report.h"
@@ -39,6 +40,18 @@ void dispatch_native(std::uint32_t slot, NativeRegs& regs) {
         regs.x[0] = 0;
         regs.d[0] = 0;
         return;
+    }
+    // FBO screen scaler: when the game's render call returns, its picture is complete. Java swaps the
+    // surface next (the guest never calls eglSwapBuffers), so scale it onto the real surface now.
+    if (fbo_scaler_enabled() && target->counter != nullptr) {
+        static thread_local bool is_render = false;
+        static thread_local const NativeTarget* checked = nullptr;
+        if (checked != target) {
+            checked = target;
+            const std::string_view label = target->label;
+            is_render = label.size() >= 12 && label.substr(label.size() - 12) == "nativeRender";
+        }
+        if (is_render && fbo_scaler_hooks().present != nullptr) fbo_scaler_hooks().present(nullptr);
     }
     store_native_result(return_type, result->guest.r0, result->guest.r1, regs,
                         [&](std::uint32_t) { return result->ref; });

@@ -169,7 +169,7 @@ bool redirect(std::uint32_t target, std::uint32_t framebuffer, std::uint32_t* ac
 void made_current() {
     const EGLContext context = eglGetCurrentContext();
     if (context == EGL_NO_CONTEXT) return;
-    if (!fbo_is_window_surface(eglGetCurrentSurface(EGL_DRAW))) return;  // loader / pbuffer contexts: leave alone
+    if (eglGetCurrentSurface(EGL_DRAW) == EGL_NO_SURFACE) return;  // no drawing surface: leave alone
     std::lock_guard<std::mutex> lock(g_mutex);
     const auto found = g_contexts.find(context);
     if (found != g_contexts.end() && (!found->second.ok || glIsFramebuffer(found->second.fbo))) return;
@@ -227,7 +227,8 @@ void present(const void* surface) {
     const EGLContext context = eglGetCurrentContext();
     if (context == EGL_NO_CONTEXT) return;
     const EGLDisplay display = eglGetCurrentDisplay();
-    if (eglGetCurrentSurface(EGL_DRAW) != const_cast<EGLSurface>(surface)) return;
+    if (surface == nullptr) surface = eglGetCurrentSurface(EGL_DRAW);
+    if (surface == EGL_NO_SURFACE || eglGetCurrentSurface(EGL_DRAW) != const_cast<EGLSurface>(surface)) return;
     std::lock_guard<std::mutex> lock(g_mutex);
     const auto found = g_contexts.find(context);
     if (found == g_contexts.end() || !found->second.ok) return;
@@ -311,12 +312,22 @@ void present(const void* surface) {
     }
 }
 
+// Every GL call: a context we have not seen on this thread gets its off-screen framebuffer.
+void gl_call() {
+    thread_local EGLContext last = EGL_NO_CONTEXT;
+    const EGLContext now = eglGetCurrentContext();
+    if (now == last) return;
+    last = now;
+    if (now != EGL_NO_CONTEXT) made_current();
+}
+
 struct Installer {
     Installer() {
         FboScalerHooks& hooks = fbo_scaler_hooks();
         hooks.bind_redirect = redirect;
         hooks.made_current = made_current;
         hooks.present = present;
+        hooks.gl_call = gl_call;
     }
 } g_installer;
 

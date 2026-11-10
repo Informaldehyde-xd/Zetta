@@ -36,8 +36,12 @@ struct FboScalerHooks {
     bool (*bind_redirect)(std::uint32_t target, std::uint32_t framebuffer, std::uint32_t* actual) = nullptr;
     // The game's context was made current: create its off-screen framebuffer the first time.
     void (*made_current)() = nullptr;
-    // Right before eglSwapBuffers(surface): scale the off-screen picture onto the real surface.
+    // Scale the off-screen picture onto the real surface, right before the frame is shown. `surface` is
+    // the EGL surface being swapped, or nullptr for "the one that is current" (games whose Java code
+    // owns EGL and swaps it: the guest never calls eglSwapBuffers).
     void (*present)(const void* surface) = nullptr;
+    // Called before every GLES 2/3 call of the guest: notices a new current context (Java-owned EGL).
+    void (*gl_call)() = nullptr;
 };
 FboScalerHooks& fbo_scaler_hooks();
 

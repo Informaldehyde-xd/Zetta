@@ -225,6 +225,10 @@ bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
         }
     }
     // -----------------------------------------
+    if (fbo_scaler_enabled()) {
+        const FboScalerHooks& scaler = fbo_scaler_hooks();
+        if (scaler.gl_call != nullptr) scaler.gl_call();
+    }
     // --- FBO SCREEN SCALER (fbo_scale=1): the game's "screen" (framebuffer 0) is our off-screen one ---
     if (index == ZB_GL_HC_glBindFramebuffer && fbo_scaler_enabled()) {
         const FboScalerHooks& hooks = fbo_scaler_hooks();
