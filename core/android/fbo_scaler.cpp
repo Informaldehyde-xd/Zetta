@@ -4,6 +4,8 @@
 // inside the game's own context, so it saves every piece of GL state it touches and puts it back.
 
 #include <EGL/egl.h>
+#include <GLES/gl.h>
+#include <GLES/glext.h>
 #include <GLES3/gl3.h>
 
 #include <algorithm>
@@ -93,8 +95,6 @@ bool make_program(Ctx& c) {
     return true;
 }
 
-// Builds the off-screen framebuffer, the scaling program and the quad. The game's own bindings are
-// put back before it returns.
 bool create_resources(Ctx& c) {
     const FboConfig& cfg = fbo_config();
     const bool es1 = is_es1();
@@ -107,6 +107,7 @@ bool create_resources(Ctx& c) {
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex);
     glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prev_abuf);
 
+    // colour: a texture, so the scaling pass can read it
     glGenTextures(1, &c.tex);
     glBindTexture(GL_TEXTURE_2D, c.tex);
     const GLint filter = cfg.linear ? GL_LINEAR : GL_NEAREST;
@@ -116,37 +117,35 @@ bool create_resources(Ctx& c) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, cfg.width, cfg.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
-    // ES1 uses the OES entry points; ES2/3 use the core ones.
+    bool complete = false;
     if (es1) {
         glGenFramebuffersOES(1, &c.fbo);
         glBindFramebufferOES(kFramebuffer, c.fbo);
         glFramebufferTexture2DOES(kFramebuffer, GL_COLOR_ATTACHMENT0_OES, GL_TEXTURE_2D, c.tex, 0);
+
+        glGenRenderbuffersOES(1, &c.depth);
+        glBindRenderbufferOES(GL_RENDERBUFFER, c.depth);
+        glRenderbufferStorageOES(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16_OES, cfg.width, cfg.height);
+        glFramebufferRenderbufferOES(kFramebuffer, GL_DEPTH_ATTACHMENT_OES, GL_RENDERBUFFER, c.depth);
+        
+        complete = glCheckFramebufferStatusOES(kFramebuffer) == GL_FRAMEBUFFER_COMPLETE_OES;
     } else {
         glGenFramebuffers(1, &c.fbo);
         glBindFramebuffer(kFramebuffer, c.fbo);
         glFramebufferTexture2D(kFramebuffer, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, c.tex, 0);
-    }
 
-    glGenRenderbuffers(1, &c.depth);
-    glBindRenderbuffer(GL_RENDERBUFFER, c.depth);
-    if (es1) {
-        glRenderbufferStorageOES(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16_OES, cfg.width, cfg.height);
-        glFramebufferRenderbufferOES(kFramebuffer, GL_DEPTH_ATTACHMENT_OES, GL_RENDERBUFFER, c.depth);
-    } else {
+        glGenRenderbuffers(1, &c.depth);
+        glBindRenderbuffer(GL_RENDERBUFFER, c.depth);
         glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, cfg.width, cfg.height);
         glFramebufferRenderbuffer(kFramebuffer, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, c.depth);
-    }
 
-    bool complete;
-    if (es1) {
-        complete = glCheckFramebufferStatusOES(kFramebuffer) == GL_FRAMEBUFFER_COMPLETE_OES;
-    } else {
         complete = glCheckFramebufferStatus(kFramebuffer) == GL_FRAMEBUFFER_COMPLETE;
     }
 
-    // Shaders are GLES 2+, so only build them for non-ES1.
     bool ok = complete;
-    if (ok && !es1) ok = make_program(c);
+    if (ok && !es1) {
+        ok = make_program(c);
+    }
 
     if (ok && !es1) {
         static const GLfloat quad[16] = {
@@ -217,32 +216,6 @@ void made_current() {
     log("fbo scaler: %dx%d off-screen framebuffer ready (fbo %u)", cfg.width, cfg.height, c.fbo);
 }
 
-struct Attrib {
-    GLint enabled = 0, size = 4, type = GL_FLOAT, normalized = 0, stride = 0, buffer = 0;
-    void* pointer = nullptr;
-};
-
-void save_attrib(GLuint index, Attrib& a) {
-    glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &a.enabled);
-    glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_SIZE, &a.size);
-    glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_TYPE, &a.type);
-    glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_NORMALIZED, &a.normalized);
-    glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_STRIDE, &a.stride);
-    glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &a.buffer);
-    glGetVertexAttribPointerv(index, GL_VERTEX_ATTRIB_ARRAY_POINTER, &a.pointer);
-}
-
-void restore_attrib(GLuint index, const Attrib& a) {
-    // A disabled array with no buffer holds nothing the game needs: it sets the pointer before use.
-    if (a.buffer != 0 || a.enabled) {
-        glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(a.buffer));
-        glVertexAttribPointer(index, a.size, static_cast<GLenum>(a.type), static_cast<GLboolean>(a.normalized),
-                              a.stride, a.pointer);
-    }
-    if (a.enabled) glEnableVertexAttribArray(index);
-    else glDisableVertexAttribArray(index);
-}
-
 void present(const void* surface) {
     const EGLContext context = eglGetCurrentContext();
     if (context == EGL_NO_CONTEXT) return;
@@ -277,7 +250,7 @@ void present(const void* surface) {
     GLboolean mask[4] = {1, 1, 1, 1};
     GLfloat clear[4] = {0.f, 0.f, 0.f, 0.f};
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fb);
-    glGetIntegerv(GL_CURRENT_PROGRAM, &prev_program);
+    if (!es1) glGetIntegerv(GL_CURRENT_PROGRAM, &prev_program);
     glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prev_abuf);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &prev_active);
     glGetIntegerv(GL_VIEWPORT, viewport);
@@ -290,11 +263,6 @@ void present(const void* surface) {
     for (int i = 0; i < kCapCount; ++i) was[i] = glIsEnabled(kCaps[i]);
     glActiveTexture(GL_TEXTURE0);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex);
-    Attrib attribs[2];
-    if (!es1) {
-        save_attrib(0, attribs[0]);
-        save_attrib(1, attribs[1]);
-    }
 
     // Bind the real framebuffer 0
     if (es1) glBindFramebufferOES(kFramebuffer, 0);
@@ -312,8 +280,6 @@ void present(const void* surface) {
         // ===== FIXED-FUNCTION BLIT (GLES 1.1) =====
         GLint prev_matrix_mode = GL_MODELVIEW;
         glGetIntegerv(GL_MATRIX_MODE, &prev_matrix_mode);
-        GLint prev_client_tex = 0;
-        glGetIntegerv(GL_TEXTURE_COORD_ARRAY_BUFFER_BINDING, &prev_client_tex);
         GLboolean prev_vert_arr = glIsEnabled(GL_VERTEX_ARRAY);
         GLboolean prev_tex_arr  = glIsEnabled(GL_TEXTURE_COORD_ARRAY);
         GLboolean prev_tex2d    = glIsEnabled(GL_TEXTURE_2D);
@@ -353,7 +319,7 @@ void present(const void* surface) {
         glMatrixMode(GL_PROJECTION);
         glPopMatrix();
         glMatrixMode(prev_matrix_mode);
-        (void)prev_client_tex; (void)prev_vert_arr; (void)prev_tex_arr;
+        (void)prev_vert_arr; (void)prev_tex_arr;
     } else {
         // ===== SHADER BLIT (GLES 2.0 / 3.0) =====
         glUseProgram(c.program);
@@ -365,8 +331,9 @@ void present(const void* surface) {
         glEnableVertexAttribArray(0);
         glEnableVertexAttribArray(1);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        restore_attrib(0, attribs[0]);
-        restore_attrib(1, attribs[1]);
+        
+        glDisableVertexAttribArray(0);
+        glDisableVertexAttribArray(1);
         glUseProgram(static_cast<GLuint>(prev_program));
     }
 
