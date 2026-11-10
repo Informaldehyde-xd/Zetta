@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 #include <dlfcn.h>
 
@@ -171,6 +172,179 @@ void decompress_dxt5(const std::uint8_t* data, std::uint8_t* out, int width, int
 }
 }  // namespace
 
+std::atomic<std::uint32_t>& gl_state_generation() {
+    static std::atomic<std::uint32_t> generation{0};
+    return generation;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Duplicate GL state calls (gl_skip_dup=1, default on). Old engines set the same state again and
+// again (bind the buffer that is already bound, enable what is already enabled...). Each such call
+// still costs a guest -> host transition, so a repeat of the last value is answered here and never
+// reaches the driver. The cache starts "unknown" for every context and is dropped whenever the
+// current EGL context changes, when something that can change the state behind it is called
+// (delete of a texture / buffer / program, link, vertex array objects), so it never skips a call
+// that would change something.
+// ---------------------------------------------------------------------------------------------
+namespace {
+
+constexpr std::uint32_t kDupUnknown = 0xFFFFFFFFu;
+enum DupKind { kDupProgram, kDupTexture, kDupBuffer, kDupCaps, kDupDepth, kDupViewport, kDupBlend, kDupKinds };
+constexpr const char* kDupNames[kDupKinds] = {"use-program", "bind-texture", "bind-buffer", "enable",
+                                              "depth", "viewport", "blend/cull"};
+
+struct DupCache {
+    std::uintptr_t context = 0;
+    std::uint32_t program = kDupUnknown;
+    std::uint32_t array_buffer = kDupUnknown;
+    std::uint32_t element_buffer = kDupUnknown;
+    std::uint32_t unit = kDupUnknown;  // GL_TEXTURE0 + n, unknown until glActiveTexture was seen
+    std::uint32_t texture[32][2];      // [unit][2D, cube map]
+    std::int8_t caps[9];               // 0 off, 1 on, 2 unknown
+    std::uint32_t depth_mask = kDupUnknown, depth_func = kDupUnknown, cull = kDupUnknown;
+    std::uint32_t blend_src = kDupUnknown, blend_dst = kDupUnknown, color_mask = kDupUnknown;
+    std::uint32_t viewport[4] = {kDupUnknown, kDupUnknown, kDupUnknown, kDupUnknown};
+    bool vao_used = false;
+    std::uint64_t total[kDupKinds] = {};
+    std::uint64_t skipped[kDupKinds] = {};
+    std::uint64_t since_report = 0;
+
+    void reset(std::uintptr_t new_context) {
+        context = new_context;
+        program = array_buffer = element_buffer = unit = kDupUnknown;
+        forget_textures();
+        std::memset(caps, 2, sizeof caps);
+        depth_mask = depth_func = cull = blend_src = blend_dst = color_mask = kDupUnknown;
+        for (std::uint32_t& value : viewport) value = kDupUnknown;
+        vao_used = false;
+    }
+    void forget_textures() { std::memset(texture, 0xFF, sizeof texture); }
+};
+
+int dup_cap_index(std::uint32_t cap) {
+    switch (cap) {
+        case 0x0BE2: return 0;  // BLEND
+        case 0x0B44: return 1;  // CULL_FACE
+        case 0x0B71: return 2;  // DEPTH_TEST
+        case 0x0C11: return 3;  // SCISSOR_TEST
+        case 0x0B90: return 4;  // STENCIL_TEST
+        case 0x0BD0: return 5;  // DITHER
+        case 0x8037: return 6;  // POLYGON_OFFSET_FILL
+        case 0x809E: return 7;  // SAMPLE_ALPHA_TO_COVERAGE
+        case 0x80A0: return 8;  // SAMPLE_COVERAGE
+        default: return -1;
+    }
+}
+
+// True when the call repeats what the context already has and can be dropped.
+bool dup_same(DupCache& cache, DupKind kind, std::uint32_t& slot, std::uint32_t value) {
+    ++cache.total[kind];
+    if (slot == value) {
+        ++cache.skipped[kind];
+        return true;
+    }
+    slot = value;
+    return false;
+}
+
+bool dup_check(DupCache& cache, std::uint32_t index, const std::uint32_t a[4]) {
+    switch (index) {
+        case ZB_GL_HC_glUseProgram:
+            return dup_same(cache, kDupProgram, cache.program, a[0]);
+        case ZB_GL_HC_glActiveTexture:
+            cache.unit = a[0];  // always passed on; only remembered
+            return false;
+        case ZB_GL_HC_glBindTexture: {
+            const int slot = a[0] == 0x0DE1 ? 0 : (a[0] == 0x8513 ? 1 : -1);
+            if (slot < 0 || cache.unit == kDupUnknown || cache.unit < 0x84C0u || cache.unit >= 0x84C0u + 32u) return false;
+            return dup_same(cache, kDupTexture, cache.texture[cache.unit - 0x84C0u][slot], a[1]);
+        }
+        case ZB_GL_HC_glBindBuffer:
+            if (a[0] == 0x8892) return dup_same(cache, kDupBuffer, cache.array_buffer, a[1]);  // ARRAY_BUFFER
+            // The element buffer belongs to the vertex array object in GLES 3; only cache it while
+            // the game has never used one.
+            if (a[0] == 0x8893 && !cache.vao_used) return dup_same(cache, kDupBuffer, cache.element_buffer, a[1]);
+            return false;
+        case ZB_GL_HC_glEnable:
+        case ZB_GL_HC_glDisable: {
+            const int slot = dup_cap_index(a[0]);
+            if (slot < 0) return false;
+            const std::int8_t wanted = index == ZB_GL_HC_glEnable ? 1 : 0;
+            ++cache.total[kDupCaps];
+            if (cache.caps[slot] == wanted) {
+                ++cache.skipped[kDupCaps];
+                return true;
+            }
+            cache.caps[slot] = wanted;
+            return false;
+        }
+        case ZB_GL_HC_glDepthMask:
+            return dup_same(cache, kDupDepth, cache.depth_mask, a[0] & 0xFFu);
+        case ZB_GL_HC_glDepthFunc:
+            return dup_same(cache, kDupDepth, cache.depth_func, a[0]);
+        case ZB_GL_HC_glCullFace:
+            return dup_same(cache, kDupBlend, cache.cull, a[0]);
+        case ZB_GL_HC_glBlendFunc: {
+            ++cache.total[kDupBlend];
+            if (cache.blend_src == a[0] && cache.blend_dst == a[1]) {
+                ++cache.skipped[kDupBlend];
+                return true;
+            }
+            cache.blend_src = a[0];
+            cache.blend_dst = a[1];
+            return false;
+        }
+        case ZB_GL_HC_glColorMask:
+            return dup_same(cache, kDupDepth, cache.color_mask,
+                            (a[0] & 1u) | ((a[1] & 1u) << 1) | ((a[2] & 1u) << 2) | ((a[3] & 1u) << 3));
+        case ZB_GL_HC_glViewport: {
+            ++cache.total[kDupViewport];
+            if (cache.viewport[0] == a[0] && cache.viewport[1] == a[1] && cache.viewport[2] == a[2] &&
+                cache.viewport[3] == a[3]) {
+                ++cache.skipped[kDupViewport];
+                return true;
+            }
+            for (int i = 0; i < 4; ++i) cache.viewport[i] = a[i];
+            return false;
+        }
+        // Things that can change the cached state without a matching call:
+        case ZB_GL_HC_glDeleteTextures:
+            cache.forget_textures();
+            return false;
+        case ZB_GL_HC_glDeleteBuffers:
+            cache.array_buffer = cache.element_buffer = kDupUnknown;
+            return false;
+        case ZB_GL_HC_glDeleteProgram:
+        case ZB_GL_HC_glLinkProgram:
+            cache.program = kDupUnknown;
+            return false;
+        case ZB_GL_HC_glBindVertexArray:
+        case ZB_GL_HC_glBindVertexArrayOES:
+            cache.vao_used = true;
+            cache.element_buffer = kDupUnknown;
+            return false;
+        default:
+            return false;
+    }
+}
+
+void dup_report(DupCache& cache) {
+    std::uint64_t total = 0, skipped = 0;
+    std::string detail;
+    for (int k = 0; k < kDupKinds; ++k) {
+        total += cache.total[k];
+        skipped += cache.skipped[k];
+        detail += std::string(k ? ", " : "") + kDupNames[k] + " " + std::to_string(cache.skipped[k]) + "/" +
+                  std::to_string(cache.total[k]);
+    }
+    runtime_report().note_gl_detail("gl-dedupe",
+                                    "skipped " + std::to_string(skipped) + " of " + std::to_string(total) +
+                                        " state calls (" + detail + ")",
+                                    true);
+}
+
+}  // namespace
+
 bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
     // OpenGL ES 1.x fixed-function names (old Unity 3.x games) live outside the GLES 2.0/3.0 ranges.
     if (!is_gl_host_call(index)) return gles1_handle_host_call(*this, index, thread);
@@ -239,6 +413,40 @@ bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
         }
     }
     // -----------------------------------------
+
+    // --- duplicate state calls (gl_skip_dup=1) ---
+    {
+        static const bool skip_dup = option_enabled("gl_skip_dup", true);
+        if (skip_dup) {
+            static thread_local DupCache cache;
+            const std::uintptr_t context = egl_context();
+            // A game that re-creates its GL context in Java (GLSurfaceView) can get the same context
+            // address back. The native entry points that mean "new surface / context" bump this number.
+            static thread_local std::uint32_t seen_generation = 0;
+            const std::uint32_t generation = gl_state_generation().load(std::memory_order_relaxed);
+            if (generation != seen_generation) {
+                seen_generation = generation;
+                cache.reset(0);
+            }
+            if (context == 0) {
+                cache.reset(0);  // cannot tell which context this is: do not cache
+            } else {
+                if (context != cache.context) cache.reset(context);
+                const std::uint32_t args[4] = {call.arg(0), call.arg(1), call.arg(2), call.arg(3)};
+                if (dup_check(cache, index, args)) {
+                    if (++cache.since_report >= 20000) {
+                        cache.since_report = 0;
+                        dup_report(cache);
+                    }
+                    return true;
+                }
+                if (++cache.since_report >= 20000) {
+                    cache.since_report = 0;
+                    dup_report(cache);
+                }
+            }
+        }
+    }
 
     if (gl_diagnostics_enabled()) gl_diagnose_before(*this, call);
     if (dispatch(call)) {

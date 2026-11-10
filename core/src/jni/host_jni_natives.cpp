@@ -12,6 +12,8 @@
 
 namespace zb {
 
+std::atomic<std::uint32_t>& gl_state_generation();  // host_gl.cpp
+
 namespace {
 
 std::atomic<HostJni::Impl*> g_jni{nullptr};
@@ -20,6 +22,15 @@ std::atomic<HostJni::Impl*> g_jni{nullptr};
 void dispatch_native(std::uint32_t slot, NativeRegs& regs) {
     HostJni::Impl* jni = g_jni.load();
     const NativeTarget* target = jni != nullptr ? jni->slots.target(slot) : nullptr;
+    // A native entry point that means "new GL surface / context": the GL state cache starts again.
+    if (target != nullptr) {
+        const std::string_view name = target->label;
+        if (name.find("Init") != std::string_view::npos || name.find("Resume") != std::string_view::npos ||
+            name.find("Surface") != std::string_view::npos || name.find("Resize") != std::string_view::npos ||
+            name.find("Created") != std::string_view::npos) {
+            gl_state_generation().fetch_add(1, std::memory_order_relaxed);
+        }
+    }
     if (target == nullptr) {
         log("native thunk slot %u has no target", slot);
         std::abort();
