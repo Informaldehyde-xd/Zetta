@@ -172,8 +172,25 @@ void decompress_dxt5(const std::uint8_t* data, std::uint8_t* out, int width, int
 }  // namespace
 
 bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
+    // FBO scaler: notice a new current context before any ES1/ES2 split.
+    if (fbo_scaler_enabled()) {
+        const FboScalerHooks& scaler = fbo_scaler_hooks();
+        if (scaler.gl_call != nullptr) scaler.gl_call();
+    }
+
     // OpenGL ES 1.x fixed-function names (old Unity 3.x games) live outside the GLES 2.0/3.0 ranges.
-    if (!is_gl_host_call(index)) return gles1_handle_host_call(*this, index, thread);
+    if (!is_gl_host_call(index)) {
+        // FBO scaler: redirect glBindFramebufferOES(…, 0) to our off-screen framebuffer too.
+        if (fbo_scaler_enabled() && index == ZB_GL_HC_glBindFramebufferOES) {
+            const FboScalerHooks& hooks = fbo_scaler_hooks();
+            std::uint32_t actual = 0;
+            if (hooks.bind_redirect != nullptr && hooks.bind_redirect(thread.regs()[0], thread.regs()[1], &actual)) {
+                // fall through to the ES1 dispatcher with the redirected framebuffer
+                thread.regs()[1] = actual;
+            }
+        }
+        return gles1_handle_host_call(*this, index, thread);
+    }
     const char* name = gl_host_call_name(index);
     if (gl_trace_enabled()) {
         log("GLES trace: %s(0x%x, 0x%x, 0x%x, 0x%x)", name, thread.regs()[0], thread.regs()[1],
@@ -225,11 +242,6 @@ bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
         }
     }
     // -----------------------------------------
-    if (fbo_scaler_enabled()) {
-        const FboScalerHooks& scaler = fbo_scaler_hooks();
-        if (scaler.gl_call != nullptr) scaler.gl_call();
-    }
-    // --- FBO SCREEN SCALER (fbo_scale=1): the game's "screen" (framebuffer 0) is our off-screen one ---
     if (index == ZB_GL_HC_glBindFramebuffer && fbo_scaler_enabled()) {
         const FboScalerHooks& hooks = fbo_scaler_hooks();
         std::uint32_t actual = 0;
