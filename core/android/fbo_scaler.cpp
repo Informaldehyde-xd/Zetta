@@ -15,6 +15,48 @@
 
 #include "zb/fbo_scaler.h"
 #include "zb/log.h"
+// NDK r29's <GLES/glext.h> dropped these prototypes (Khronos deprecated
+// GL_GLEXT_PROTOTYPES), but libGLESv1_CM.so still exports them. Declare them
+// manually so the linker finds them.
+extern "C" {
+    GL_API void glGenFramebuffersOES(GLsizei n, GLuint* framebuffers);
+    GL_API void glBindFramebufferOES(GLenum target, GLuint framebuffer);
+    GL_API void glFramebufferTexture2DOES(GLenum target, GLenum attachment,
+                                           GLenum textarget, GLuint texture, GLint level);
+    GL_API GLenum glCheckFramebufferStatusOES(GLenum target);
+    GL_API void glDeleteFramebuffersOES(GLsizei n, const GLuint* framebuffers);
+    GL_API void glGenRenderbuffersOES(GLsizei n, GLuint* renderbuffers);
+    GL_API void glBindRenderbufferOES(GLenum target, GLuint renderbuffer);
+    GL_API void glRenderbufferStorageOES(GLenum target, GLenum internalformat,
+                                         GLsizei width, GLsizei height);
+    GL_API void glFramebufferRenderbufferOES(GLenum target, GLenum attachment,
+                                             GLenum renderbuffertarget, GLuint renderbuffer);
+    GL_API GLboolean glIsFramebufferOES(GLuint framebuffer);
+    GL_API GLboolean glIsRenderbufferOES(GLuint renderbuffer);
+}
+
+// The constants may also have been dropped from the header in r29.
+#ifndef GL_FRAMEBUFFER_OES
+#define GL_FRAMEBUFFER_OES 0x8D40
+#endif
+#ifndef GL_RENDERBUFFER_OES
+#define GL_RENDERBUFFER_OES 0x8D41
+#endif
+#ifndef GL_FRAMEBUFFER_COMPLETE_OES
+#define GL_FRAMEBUFFER_COMPLETE_OES 0x8CD5
+#endif
+#ifndef GL_COLOR_ATTACHMENT0_OES
+#define GL_COLOR_ATTACHMENT0_OES 0x8CE0
+#endif
+#ifndef GL_DEPTH_ATTACHMENT_OES
+#define GL_DEPTH_ATTACHMENT_OES 0x8D00
+#endif
+#ifndef GL_STENCIL_ATTACHMENT_OES
+#define GL_STENCIL_ATTACHMENT_OES 0x8D20
+#endif
+#ifndef GL_DEPTH_COMPONENT16_OES
+#define GL_DEPTH_COMPONENT16_OES 0x81A5
+#endif
 
 namespace zb {
 
