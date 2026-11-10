@@ -1,4 +1,5 @@
 #include "zb/host_native_window.h"
+#include "zb/fbo_scaler.h"
 
 #include <cstdint>
 
@@ -94,14 +95,14 @@ bool HostNativeWindow::handle_host_call(std::uint32_t index, GuestThread& thread
         const void* window = require_window(regs[0]);
         const std::int32_t result =
             window != nullptr ? backend_.query(const_cast<void*>(window), NativeWindowBackend::Query::Width) : -1;
-        regs[0] = static_cast<std::uint32_t>(result);
+        regs[0] = static_cast<std::uint32_t>(fbo_scaler_enabled() && result > 0 ? fbo_config().width : result);
         return true;
     }
     case ZB_WINDOW_HC_ANativeWindow_getHeight: {
         const void* window = require_window(regs[0]);
         const std::int32_t result =
             window != nullptr ? backend_.query(const_cast<void*>(window), NativeWindowBackend::Query::Height) : -1;
-        regs[0] = static_cast<std::uint32_t>(result);
+        regs[0] = static_cast<std::uint32_t>(fbo_scaler_enabled() && result > 0 ? fbo_config().height : result);
         return true;
     }
     case ZB_WINDOW_HC_ANativeWindow_getFormat: {
@@ -115,8 +116,11 @@ bool HostNativeWindow::handle_host_call(std::uint32_t index, GuestThread& thread
         const void* window = require_window(regs[0]);
         std::int32_t result = -1;
         if (window != nullptr) {
-            result = backend_.set_buffers_geometry(const_cast<void*>(window), static_cast<std::int32_t>(regs[1]),
-                                                   static_cast<std::int32_t>(regs[2]),
+            // FBO screen scaler: the game must not shrink the real surface; it draws into our own buffer.
+            const bool keep_size = fbo_scaler_enabled();
+            result = backend_.set_buffers_geometry(const_cast<void*>(window),
+                                                   keep_size ? 0 : static_cast<std::int32_t>(regs[1]),
+                                                   keep_size ? 0 : static_cast<std::int32_t>(regs[2]),
                                                    static_cast<std::int32_t>(regs[3]));
         }
         regs[0] = static_cast<std::uint32_t>(result);

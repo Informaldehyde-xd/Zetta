@@ -20,6 +20,7 @@ add_library(zbcore STATIC
     src/gl/gl_manual.cpp
     src/gl/host_egl.cpp
     src/gl/host_gl.cpp
+    src/gl/fbo_hooks.cpp
     src/gl/host_gles1.cpp
     src/external_dir.cpp
     src/options.cpp
@@ -68,7 +69,8 @@ if (ANDROID)
     add_library(zbridge SHARED src/zbridge_c_api.cpp android/zbridge_jni.cpp android/jni_env_backend.cpp
         android/guest_jni_runtime.cpp android/gl_driver_backend.cpp android/asset_driver_backend.cpp
         android/egl_driver_backend.cpp android/native_window_driver_backend.cpp
-        android/looper_driver_backend.cpp android/native_activity_glue.cpp)
+        android/looper_driver_backend.cpp android/native_activity_glue.cpp
+        android/fbo_scaler.cpp)
     # GLESv3 for the GLES 3.0 half of GlDriverBackend. On the device both live in the one real
     # libGLESv2.so; the NDK splits the stub libraries by version.
     # core/src for the generated dispatch and driver .inc files the Android backends include.

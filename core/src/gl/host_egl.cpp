@@ -11,6 +11,7 @@
 #include <cstring>
 
 #include "zb/egl_hostcalls.h"
+#include "zb/fbo_scaler.h"
 #include "zb/guest_memory.h"
 #include "zb/library_protocol.h"
 #include "zb/log.h"
@@ -262,51 +263,19 @@ bool HostEgl::handle_host_call(std::uint32_t index, GuestThread& thread) {
                 static std::atomic<bool> noted{false};
                 if (!noted.exchange(true)) log("EGL: swap on a thread without a current context; the game's context was made current");
                 runtime_report().note_egl_current(static_cast<std::uint64_t>(::syscall(SYS_gettid)));
+                if (fbo_scaler_enabled() && fbo_scaler_hooks().made_current != nullptr) fbo_scaler_hooks().made_current();
             }
         }
     }
     Call call(*this, thread, index);
-   // --- CONDITIONAL GAMELOFT STORM ENGINE SCREEN SPOOF ---
-// Only runs if "spoof_gameloft_res=1" is in zb-options.txt
-// --- CONDITIONAL GAMELOFT STORM ENGINE SCREEN SPOOF ---
-static const bool spoof_gameloft = option_enabled("spoof_gameloft_res", false);
-
-if (spoof_gameloft) {
-    // 1. Spoof what the engine THINKS the screen size is
-    if (index == ZB_EGL_HC_eglQuerySurface) {
-        EGLint attribute = call.arg(2);
-        if (attribute == 0x3057 || attribute == 0x3056) { // EGL_WIDTH / EGL_HEIGHT
-            std::uint32_t guest_ptr = call.arg(3);
-            if (guest_ptr != 0) {
-                std::uint32_t* host_ptr = reinterpret_cast<std::uint32_t*>(
-                    runtime_.memory().host_ptr(guest_ptr, 4, kPageWrite));
-                if (host_ptr) {
-                    *host_ptr = (attribute == 0x3057) ? 1280 : 720;
-                    thread.regs()[0] = 1; // EGL_TRUE
-                    return true; 
-                }
-            }
-        }
-    }
-
-    // 2. Force the physical Android window buffer to 1280x720
-    if (index == ZB_EGL_HC_eglCreateWindowSurface) {
-        // FIXED: Use handle_of instead of private resolve_handle
-        const void* win = call.handle_of(2, EglObject::Surface); 
-        if (win != nullptr) {
-            static auto set_buffers_geometry = reinterpret_cast<int(*)(void*, int, int, int)>(
-                dlsym(RTLD_DEFAULT, "ANativeWindow_setBuffersGeometry"));
-            if (set_buffers_geometry) {
-                // 1 = WINDOW_FORMAT_RGBA_8888
-                set_buffers_geometry(const_cast<void*>(win), 1280, 720, 1);
-            }
-        }
-    }
-}
-// -----------------------------------------------------
     if (dispatch(call)) {
         if (index == ZB_EGL_HC_eglCreateContext && thread.regs()[0] != 0) {
             g_last_context_handle.store(thread.regs()[0], std::memory_order_relaxed);
+        }
+        // FBO screen scaler: the game's context just became current on its window surface.
+        if (index == ZB_EGL_HC_eglMakeCurrent && thread.regs()[0] != 0 && fbo_scaler_enabled()) {
+            const FboScalerHooks& hooks = fbo_scaler_hooks();
+            if (hooks.made_current != nullptr) hooks.made_current();
         }
         const std::uint64_t slot = g_recent_egl_next.fetch_add(1, std::memory_order_relaxed) % kRecentEglCalls;
         g_recent_egl[slot].index.store(index, std::memory_order_relaxed);

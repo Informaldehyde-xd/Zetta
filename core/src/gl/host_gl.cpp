@@ -8,10 +8,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include <dlfcn.h>
 
+#include "zb/options.h"
+#include "zb/fbo_scaler.h"
 #include "gl/gl_diagnostics.h"
 #include "gl/host_gles1.h"
 #include "zb/gl_hostcalls.h"
+#include "zb/options.h"
 #include "zb/log.h"
 #include "zb/runtime_report.h"
 
@@ -165,7 +169,6 @@ void decompress_dxt5(const std::uint8_t* data, std::uint8_t* out, int width, int
         }
     }
 }
-
 }  // namespace
 
 bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
@@ -219,6 +222,16 @@ bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
                 backend_.glTexImage2D(target, level, GL_RGBA, width, height, border, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
                 return true;
             }
+        }
+    }
+    // -----------------------------------------
+    // --- FBO SCREEN SCALER (fbo_scale=1): the game's "screen" (framebuffer 0) is our off-screen one ---
+    if (index == ZB_GL_HC_glBindFramebuffer && fbo_scaler_enabled()) {
+        const FboScalerHooks& hooks = fbo_scaler_hooks();
+        std::uint32_t actual = 0;
+        if (hooks.bind_redirect != nullptr && hooks.bind_redirect(call.arg(0), call.arg(1), &actual)) {
+            backend_.glBindFramebuffer(call.arg(0), actual);
+            return true;
         }
     }
     // -----------------------------------------

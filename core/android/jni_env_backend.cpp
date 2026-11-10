@@ -14,6 +14,8 @@
 #include "zb/jni_descriptor.h"
 #include "zb/external_dir.h"
 #include "zb/runtime_report.h"
+#include "zb/options.h"
+#include "zb/fbo_scaler.h"
 
 namespace zb {
 
@@ -27,6 +29,9 @@ namespace {
 // zb-dpi.txt lives in the launcher's external files folder (zb::external_file_path)
 std::atomic<jmethodID> g_screen_dpi_method{nullptr};
 
+std::atomic<jmethodID> g_display_get_width{nullptr};
+std::atomic<jmethodID> g_display_get_height{nullptr};
+std::atomic<jclass> g_display_class{nullptr};
 float read_dpi_override() {
     std::FILE* file = std::fopen(external_file_path("zb-dpi.txt").c_str(), "r");
     if (file == nullptr) return 0.0f;
@@ -535,9 +540,14 @@ JniBackend::Id JniEnvBackend::get_method_id(Env env, Ref cls, const char* name, 
                                             bool is_static) {
     const jmethodID method = is_static ? E(env)->GetStaticMethodID(C(cls), name, signature)
                                        : E(env)->GetMethodID(C(cls), name, signature);
-    if (!is_static && method != nullptr && name != nullptr && signature != nullptr &&
-        std::strcmp(name, "getScreenDPI") == 0 && std::strcmp(signature, "()F") == 0) {
-        g_screen_dpi_method.store(method);
+    if (!is_static && method != nullptr && name != nullptr && signature != nullptr) {
+        if (std::strcmp(name, "getScreenDPI") == 0 && std::strcmp(signature, "()F") == 0) {
+            g_screen_dpi_method.store(method);
+        } else if (std::strcmp(name, "getWidth") == 0 && std::strcmp(signature, "()I") == 0) {
+            g_display_get_width.store(method, std::memory_order_relaxed);
+        } else if (std::strcmp(name, "getHeight") == 0 && std::strcmp(signature, "()I") == 0) {
+            g_display_get_height.store(method, std::memory_order_relaxed);
+        }
     }
     return I(method);
 }
@@ -618,15 +628,39 @@ JValue JniEnvBackend::call_method(Env env, JniCallKind kind, char type, Ref obj,
     const auto* a = reinterpret_cast<const jvalue*>(args);
     const jmethodID m = M(method);
     JValue out{};
-#define ZB_CALL(Name, member, wrap)                                                       \
-    switch (kind) {                                                                       \
-    case JniCallKind::Virtual: member wrap(e->Call##Name##MethodA(O(obj), m, a)); break;  \
-    case JniCallKind::Nonvirtual:                                                         \
-        member wrap(e->CallNonvirtual##Name##MethodA(O(obj), C(cls), m, a));              \
-        break;                                                                            \
-    case JniCallKind::Static: member wrap(e->CallStatic##Name##MethodA(C(cls), m, a)); break; \
-    case JniCallKind::NewObject: break;                                                   \
+
+    // --- SPOOF DISPLAY SIZE FOR GAMELOFT GLITCH ENGINE ---
+    if (type == 'I' && m != nullptr && (m == g_display_get_width.load(std::memory_order_relaxed) || m == g_display_get_height.load(std::memory_order_relaxed))) {
+        // FBO screen scaler (fbo_scale=1 or the older spoof_gameloft_res=1): Display.getWidth/getHeight
+        // answer with the fixed size, like eglQuerySurface does.
+        if (fbo_scaler_enabled()) {
+            jclass display = g_display_class.load(std::memory_order_acquire);
+            if (display == nullptr) {
+                jclass local = e->FindClass("android/view/Display");
+                if (local != nullptr) {
+                    display = static_cast<jclass>(e->NewGlobalRef(local));
+                    e->DeleteLocalRef(local);
+                    g_display_class.store(display, std::memory_order_release);
+                }
+            }
+            if (display != nullptr && e->IsInstanceOf(O(obj), display) == JNI_TRUE) {
+                out.i = (m == g_display_get_width.load(std::memory_order_relaxed)) ? fbo_config().width : fbo_config().height;
+                return out;
+            }
+        }
     }
+    // ------------------------------------------------------
+
+#define ZB_CALL(Name, member, wrap) \
+    switch (kind) { \
+    case JniCallKind::Virtual: member wrap(e->Call##Name##MethodA(O(obj), m, a)); break; \
+    case JniCallKind::Nonvirtual: \
+        member wrap(e->CallNonvirtual##Name##MethodA(O(obj), C(cls), m, a)); \
+        break; \
+    case JniCallKind::Static: member wrap(e->CallStatic##Name##MethodA(C(cls), m, a)); break; \
+    case JniCallKind::NewObject: break; \
+    }
+
     if (kind == JniCallKind::NewObject) {
         out.l = R(e->NewObjectA(C(cls), m, a));
         return out;

@@ -9,9 +9,12 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <dlfcn.h>
 
+#include "zb/options.h"
 #include "gl/gl_diagnostics.h"
 #include "zb/egl_hostcalls.h"
+#include "zb/fbo_scaler.h"
 #include "zb/host_egl.h"
 #include "zb/log.h"
 #include "zb/runtime_report.h"
@@ -107,6 +110,8 @@ bool query_attribute(HostEgl& host, HostEgl::Call& call, EglObject kind) {
         break;
     case EglObject::Surface:
         result = host.backend().eglQuerySurface(dpy, object, attribute, value);
+        // FBO screen scaler: the game is told its window has the fixed size.
+        if (result != 0) fbo_spoof_surface_size(object, attribute, value);
         // Records the surface size the first time the guest asks for it (Task 7): free
         // visibility into what got created, at the cost of no extra backend calls.
         if (result != 0 && (attribute == kEglWidthAttrib || attribute == kEglHeightAttrib)) {
@@ -361,6 +366,7 @@ bool zbegl_manual_eglCreateWindowSurface(HostEgl& host, HostEgl::Call& call) {
     // Size is not queried here: eglQuerySurface is a separate driver call the guest may not make
     // for a while, and this note must not add a call the guest did not ask for.
     if (surface != nullptr) runtime_report().note_egl_object("surface", "created");
+    fbo_note_window_surface(surface);
     call.set_handle(surface, EglObject::Surface);
     return true;
 }
@@ -379,9 +385,10 @@ bool zbegl_manual_eglCreatePlatformWindowSurface(HostEgl& host, HostEgl::Call& c
     }
     std::vector<EGLAttrib> attribs;
     if (!read_attribs(host, call, 3, attribs)) return true;
-    call.set_handle(host.backend().eglCreatePlatformWindowSurface(
-                        dpy, config, window, attribs.empty() ? nullptr : attribs.data()),
-                    EglObject::Surface);
+    EGLSurface platform_surface = host.backend().eglCreatePlatformWindowSurface(
+        dpy, config, window, attribs.empty() ? nullptr : attribs.data());
+    fbo_note_window_surface(platform_surface);
+    call.set_handle(platform_surface, EglObject::Surface);
     return true;
 }
 
@@ -441,6 +448,13 @@ bool zbegl_manual_eglSwapBuffers(HostEgl& host, HostEgl::Call& call) {
     if (!call.valid()) return true;
     runtime_report().note_egl_swap();
     if (gl_diagnostics_enabled()) gl_diagnose_swap();
+
+    // FBO screen scaler: scale the off-screen picture onto the real surface before it is shown.
+    if (fbo_scaler_enabled() && fbo_is_window_surface(surface)) {
+        const FboScalerHooks& hooks = fbo_scaler_hooks();
+        if (hooks.present != nullptr) hooks.present(surface);
+    }
+
     call.set_result(host.backend().eglSwapBuffers(dpy, surface));
     return true;
 }

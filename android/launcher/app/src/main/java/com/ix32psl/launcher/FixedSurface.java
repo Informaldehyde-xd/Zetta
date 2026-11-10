@@ -59,27 +59,43 @@ final class FixedSurface {
         }
     }
 
+    /** The off-screen-buffer mode (zb-options.txt fbo_scale=1): the game draws at width x height inside the translator. */
+    private static final class Fbo {
+        final int width;
+        final int height;
+        final boolean stretch;
+
+        Fbo(int width, int height, boolean stretch) {
+            this.width = width;
+            this.height = height;
+            this.stretch = stretch;
+        }
+    }
+
     /** Called for every guest Activity after its onCreate. */
     static void apply(final Activity activity) {
-        final Setting setting = read(activity.getPackageName());
-        if (setting == null) return;
+        final Fbo fbo = readFbo();
+        final Setting setting = fbo == null ? read(activity.getPackageName()) : null;
+        if (fbo == null && setting == null) return;
         final Window window = activity.getWindow();
         final View decor = window.getDecorView();
         final SurfaceView[] game = new SurfaceView[1];
 
-        // 1. as soon as the game's SurfaceView exists, give it a fixed buffer size (before its surface is created)
+        // 1. find the game's SurfaceView; in the old mode give it a fixed buffer size (before its surface is created)
         decor.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
             @Override
             public void onGlobalLayout() {
                 final SurfaceView found = findSurfaceView(decor);
                 if (found == null || found == game[0]) return;
                 game[0] = found;
-                found.getHolder().setFixedSize(setting.width, setting.height);
-                Log.i(TAG, "fixed surface size " + setting.width + "x" + setting.height + " set on " + found.getClass().getName());
+                if (setting != null) {
+                    found.getHolder().setFixedSize(setting.width, setting.height);
+                    Log.i(TAG, "fixed surface size " + setting.width + "x" + setting.height + " set on " + found.getClass().getName());
+                }
             }
         });
 
-        // 2. scale every touch from view pixels to surface pixels
+        // 2. scale every touch: to the surface (old mode) or to the game's own fixed screen (fbo mode)
         final Window.Callback original = window.getCallback();
         if (original == null) return;
         final int[] where = new int[2];
@@ -90,7 +106,9 @@ final class FixedSurface {
                         try {
                             if ("dispatchTouchEvent".equals(method.getName()) && args != null && args.length == 1
                                     && args[0] instanceof MotionEvent) {
-                                final MotionEvent scaled = scaleToSurface((MotionEvent) args[0], game[0], where);
+                                final MotionEvent scaled = fbo != null
+                                        ? scaleToEngine((MotionEvent) args[0], game[0], where, fbo)
+                                        : scaleToSurface((MotionEvent) args[0], game[0], where);
                                 if (scaled != null) {
                                     try {
                                         return method.invoke(original, scaled);
@@ -106,7 +124,36 @@ final class FixedSurface {
                     }
                 });
         window.setCallback(wrapped);
-        Log.i(TAG, "touch scaling installed for " + activity.getClass().getName());
+        Log.i(TAG, "touch scaling installed for " + activity.getClass().getName() + (fbo != null ? " (fbo mode)" : ""));
+    }
+
+    /**
+     * FBO mode: the translator draws the game at width x height and scales that picture onto the real
+     * surface (centred with black bars, or stretched). A touch in view pixels is turned back into the
+     * game's own pixels with exactly the same rectangle, rounded the same way as in the translator.
+     */
+    private static MotionEvent scaleToEngine(MotionEvent event, SurfaceView view, int[] where, Fbo fbo) {
+        if (view == null || view.getWidth() <= 0 || view.getHeight() <= 0) return null;
+        final int vw = view.getWidth();
+        final int vh = view.getHeight();
+        int dw = vw;
+        int dh = vh;
+        if (!fbo.stretch) {
+            final double scale = Math.min((double) vw / fbo.width, (double) vh / fbo.height);
+            dw = (int) (fbo.width * scale + 0.5);
+            dh = (int) (fbo.height * scale + 0.5);
+        }
+        if (dw <= 0 || dh <= 0) return null;
+        final int dx = (vw - dw) / 2;
+        final int dy = (vh - dh) / 2;
+        view.getLocationInWindow(where);
+        final Matrix matrix = new Matrix();
+        matrix.postTranslate(-where[0] - dx, -where[1] - dy);
+        matrix.postScale((float) fbo.width / dw, (float) fbo.height / dh);
+        matrix.postTranslate(where[0], where[1]);
+        final MotionEvent copy = MotionEvent.obtain(event);
+        copy.transform(matrix);
+        return copy;
     }
 
     /**
@@ -149,13 +196,53 @@ final class FixedSurface {
         final SurfaceView view = findSurfaceView(activity.getWindow().getDecorView());
         if (view == null) return null;
         final Rect frame = view.getHolder().getSurfaceFrame();
-        return "surface " + frame.width() + "x" + frame.height() + " in view " + view.getWidth() + "x" + view.getHeight();
+        final Fbo fbo = readFbo();
+        return "surface " + frame.width() + "x" + frame.height() + " in view " + view.getWidth() + "x" + view.getHeight()
+                + (fbo != null ? " fbo " + fbo.width + "x" + fbo.height : "");
     }
 
     /** The width:height ratio to letterbox to when a fixed size is set and "stretch" is not; 0 otherwise. */
     static float letterboxRatio(String packageName) {
+        if (readFbo() != null) return 0f;  // the translator draws its own bars in fbo mode
         final Setting setting = read(packageName);
         return setting != null && !setting.stretch ? (float) setting.width / setting.height : 0f;
+    }
+
+    /** fbo_scale / fbo_width / fbo_height / fbo_stretch from zb-options.txt; null when fbo mode is off. */
+    private static Fbo readFbo() {
+        final File dir = Diagnostics.externalFilesDir();
+        final File file = dir != null
+                ? new File(dir, "zb-options.txt")
+                : new File("/storage/emulated/0/Android/data/com.ix32psl.launcher/files/zb-options.txt");
+        boolean on = false;
+        boolean stretch = false;
+        int width = 1280;
+        int height = 720;
+        try (BufferedReader in = new BufferedReader(new FileReader(file))) {
+            String line;
+            while ((line = in.readLine()) != null) {
+                line = line.trim();
+                final int equals = line.indexOf('=');
+                if (line.isEmpty() || line.startsWith("#") || equals < 0) continue;
+                final String name = line.substring(0, equals).trim();
+                final String value = line.substring(equals + 1).trim();
+                final boolean flag = !(value.startsWith("0") || value.startsWith("n") || value.startsWith("f") || value.isEmpty());
+                try {
+                    if (name.equals("fbo_scale") || name.equals("spoof_gameloft_res")) on = flag;
+                    else if (name.equals("fbo_stretch")) stretch = flag;
+                    else if (name.equals("fbo_width")) width = Integer.parseInt(value);
+                    else if (name.equals("fbo_height")) height = Integer.parseInt(value);
+                } catch (NumberFormatException e) {
+                    // keep the default
+                }
+            }
+        } catch (IOException e) {
+            return null;  // no file: fbo mode is off
+        }
+        if (!on) return null;
+        width = Math.min(Math.max(width, 160), 4096);
+        height = Math.min(Math.max(height, 160), 4096);
+        return new Fbo(width, height, stretch);
     }
 
     private static Setting read(String packageName) {
