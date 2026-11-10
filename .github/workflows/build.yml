@@ -77,15 +77,15 @@ jobs:
         run: |
           set -eu
           cd third_party/dynarmic
-          for patch in ../patches/dynarmic-0001-thumb32-armv8.patch ../patches/dynarmic-0002-asimd-narrowing.patch ../patches/dynarmic-0003-fast-dispatch.patch; do
+          for patch in ../patches/dynarmic-0001-thumb32-armv8.patch ../patches/dynarmic-0002-asimd-narrowing.patch ../patches/dynarmic-0003-fast-dispatch.patch ../patches/dynarmic-0004-native-exclusives.patch; do
             if git apply --check "$patch" 2>/dev/null; then
               git apply "$patch"
               echo "applied $patch"
             elif git apply -R --check "$patch" 2>/dev/null; then
               echo "already applied: $patch"
-            elif [ "$patch" = "../patches/dynarmic-0003-fast-dispatch.patch" ]; then
+            elif [ "$patch" = "../patches/dynarmic-0003-fast-dispatch.patch" ] || [ "$patch" = "../patches/dynarmic-0004-native-exclusives.patch" ]; then
               # speed-only patch: build without it instead of failing
-              echo "::warning::cannot apply $patch, building without the fast dispatcher"
+              echo "::warning::cannot apply $patch, building without it"
             else
               echo "cannot apply $patch: Dynarmic is not at the pinned commit?" >&2
               exit 1

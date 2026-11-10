@@ -1,0 +1,154 @@
+diff --git a/src/dynarmic/backend/arm64/a32_address_space.cpp b/src/dynarmic/backend/arm64/a32_address_space.cpp
+index bfb8ff9..0ef8b23 100644
+--- a/src/dynarmic/backend/arm64/a32_address_space.cpp
++++ b/src/dynarmic/backend/arm64/a32_address_space.cpp
+@@ -420,6 +420,7 @@ EmitConfig A32AddressSpace::GetEmitConfig() {
+         .recompile_on_fastmem_failure = conf.recompile_on_fastmem_failure,
+         .fastmem_address_space_bits = 32,
+         .silently_mirror_fastmem = true,
++        .fastmem_exclusive_access = conf.fastmem_exclusive_access,
+ 
+         .wall_clock_cntpct = conf.wall_clock_cntpct,
+         .enable_cycle_counting = conf.enable_cycle_counting,
+diff --git a/src/dynarmic/backend/arm64/emit_arm64.h b/src/dynarmic/backend/arm64/emit_arm64.h
+index 58ccb0e..cd34bd5 100644
+--- a/src/dynarmic/backend/arm64/emit_arm64.h
++++ b/src/dynarmic/backend/arm64/emit_arm64.h
+@@ -136,6 +136,9 @@ struct EmitConfig {
+     bool recompile_on_fastmem_failure;
+     size_t fastmem_address_space_bits;
+     bool silently_mirror_fastmem;
++    // Exclusive loads / stores (LDREX / STREX) run natively (LDXR / STXR) on the fastmem window
++    // instead of through the global exclusive monitor callbacks.
++    bool fastmem_exclusive_access = false;
+ 
+     // Timing
+     bool wall_clock_cntpct;
+diff --git a/src/dynarmic/backend/arm64/emit_arm64_memory.cpp b/src/dynarmic/backend/arm64/emit_arm64_memory.cpp
+index 339e2c5..4cfee2b 100644
+--- a/src/dynarmic/backend/arm64/emit_arm64_memory.cpp
++++ b/src/dynarmic/backend/arm64/emit_arm64_memory.cpp
+@@ -625,6 +625,97 @@ void FastmemEmitWriteMemory(oaknut::CodeGenerator& code, EmitContext& ctx, IR::I
+     code.l(*end);
+ }
+ 
++// ---------------------------------------------------------------------------------------------
++// Native exclusive access (conf.fastmem_exclusive_access).
++//
++// LDREX -> LDXR and STREX -> STXR straight on the fastmem window: no call, no global monitor lock.
++// The hardware's own exclusive monitor does the work, so a store by another thread to the same
++// address makes the STXR fail exactly like on a real ARM32 CPU. The per-JIT "exclusive_state" byte
++// is kept, so CLREX and "STREX without a LDREX" behave as before. The guest address must be
++// naturally aligned, which ARM requires for exclusives anyway.
++// ---------------------------------------------------------------------------------------------
++inline bool ShouldNativeExclusive(EmitContext& ctx) {
++    return ctx.conf.fastmem_exclusive_access && ctx.conf.fastmem_pointer && ctx.fastmem.SupportsFastmem() && ShouldExt32(ctx);
++}
++
++template<size_t bitsize>
++void NativeEmitExclusiveReadMemory(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
++    auto args = ctx.reg_alloc.GetArgumentInfo(inst);
++    auto Xaddr = ctx.reg_alloc.ReadX(args[1]);
++    auto Rvalue = ctx.reg_alloc.WriteReg<std::max<std::size_t>(bitsize, 32)>(inst);
++    const bool ordered = IsOrdered(args[2].GetImmediateAccType());
++    RegAlloc::Realize(Xaddr, Rvalue);
++
++    code.MOV(Wscratch0, 1);
++    code.STRB(Wscratch0, Xstate, ctx.conf.state_exclusive_state_offset);
++    code.ADD(Xscratch0, Xfastmem, oaknut::RReg{oaknut::WReg{Xaddr->index()}}, oaknut::AddSubExt::UXTW);
++
++    const int idx = Rvalue->index();
++    switch (bitsize) {
++    case 8:
++        if (ordered) code.LDAXRB(oaknut::WReg{idx}, Xscratch0);
++        else code.LDXRB(oaknut::WReg{idx}, Xscratch0);
++        break;
++    case 16:
++        if (ordered) code.LDAXRH(oaknut::WReg{idx}, Xscratch0);
++        else code.LDXRH(oaknut::WReg{idx}, Xscratch0);
++        break;
++    case 32:
++        if (ordered) code.LDAXR(oaknut::WReg{idx}, Xscratch0);
++        else code.LDXR(oaknut::WReg{idx}, Xscratch0);
++        break;
++    case 64:
++        if (ordered) code.LDAXR(oaknut::XReg{idx}, Xscratch0);
++        else code.LDXR(oaknut::XReg{idx}, Xscratch0);
++        break;
++    default:
++        ASSERT_FALSE("Invalid bitsize");
++    }
++}
++
++template<size_t bitsize>
++void NativeEmitExclusiveWriteMemory(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
++    auto args = ctx.reg_alloc.GetArgumentInfo(inst);
++    auto Xaddr = ctx.reg_alloc.ReadX(args[1]);
++    auto Rvalue = ctx.reg_alloc.ReadReg<std::max<std::size_t>(bitsize, 32)>(args[2]);
++    const bool ordered = IsOrdered(args[3].GetImmediateAccType());
++    auto Wresult = ctx.reg_alloc.WriteW(inst);
++    RegAlloc::Realize(Xaddr, Rvalue, Wresult);
++
++    // Wscratch1 holds the result (0 = stored, 1 = failed) until the very end, so Wresult may share a
++    // host register with an input without being clobbered early.
++    oaknut::Label end;
++    code.MOV(Wscratch1, 1);
++    code.LDRB(Wscratch0, Xstate, ctx.conf.state_exclusive_state_offset);
++    code.CBZ(Wscratch0, end);
++    code.STRB(WZR, Xstate, ctx.conf.state_exclusive_state_offset);
++    code.ADD(Xscratch0, Xfastmem, oaknut::RReg{oaknut::WReg{Xaddr->index()}}, oaknut::AddSubExt::UXTW);
++
++    const int idx = Rvalue->index();
++    switch (bitsize) {
++    case 8:
++        if (ordered) code.STLXRB(Wscratch1, oaknut::WReg{idx}, Xscratch0);
++        else code.STXRB(Wscratch1, oaknut::WReg{idx}, Xscratch0);
++        break;
++    case 16:
++        if (ordered) code.STLXRH(Wscratch1, oaknut::WReg{idx}, Xscratch0);
++        else code.STXRH(Wscratch1, oaknut::WReg{idx}, Xscratch0);
++        break;
++    case 32:
++        if (ordered) code.STLXR(Wscratch1, oaknut::WReg{idx}, Xscratch0);
++        else code.STXR(Wscratch1, oaknut::WReg{idx}, Xscratch0);
++        break;
++    case 64:
++        if (ordered) code.STLXR(Wscratch1, oaknut::XReg{idx}, Xscratch0);
++        else code.STXR(Wscratch1, oaknut::XReg{idx}, Xscratch0);
++        break;
++    default:
++        ASSERT_FALSE("Invalid bitsize");
++    }
++    code.l(end);
++    code.MOV(Wresult, Wscratch1);
++}
++
+ }  // namespace
+ 
+ template<size_t bitsize>
+@@ -640,6 +731,12 @@ void EmitReadMemory(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* ins
+ 
+ template<size_t bitsize>
+ void EmitExclusiveReadMemory(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
++    if constexpr (bitsize <= 64) {
++        if (ShouldNativeExclusive(ctx)) {
++            NativeEmitExclusiveReadMemory<bitsize>(code, ctx, inst);
++            return;
++        }
++    }
+     CallbackOnlyEmitExclusiveReadMemory<bitsize>(code, ctx, inst);
+ }
+ 
+@@ -656,6 +753,12 @@ void EmitWriteMemory(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* in
+ 
+ template<size_t bitsize>
+ void EmitExclusiveWriteMemory(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
++    if constexpr (bitsize <= 64) {
++        if (ShouldNativeExclusive(ctx)) {
++            NativeEmitExclusiveWriteMemory<bitsize>(code, ctx, inst);
++            return;
++        }
++    }
+     CallbackOnlyEmitExclusiveWriteMemory<bitsize>(code, ctx, inst);
+ }
+ 
