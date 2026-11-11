@@ -637,7 +637,25 @@ int Process::run(const std::string& path, const std::vector<std::string>& argv, 
         {AT_CLKTCK, 100},
         {AT_SECURE, 0},
     };
-    const std::uint32_t sp = build_initial_stack(mem_, kStackTop, argv, envp, auxv, exe_path_);
+    // zb-env.txt (launcher's external files folder): one NAME=VALUE per line, added to the guest's
+    // environment (replacing a variable of the same name). For runtime settings such as the garbage
+    // collector's GC_* variables. Lines starting with # are ignored.
+    std::vector<std::string> guest_env = envp;
+    if (std::FILE* env_file = std::fopen(external_file_path("zb-env.txt").c_str(), "r")) {
+        char text[512];
+        while (std::fgets(text, sizeof text, env_file) != nullptr) {
+            std::string entry = text;
+            while (!entry.empty() && (entry.back() == '\n' || entry.back() == '\r' || entry.back() == ' ')) entry.pop_back();
+            const std::size_t equals = entry.find('=');
+            if (entry.empty() || entry[0] == '#' || equals == std::string::npos || equals == 0) continue;
+            const std::string prefix = entry.substr(0, equals + 1);
+            std::erase_if(guest_env, [&](const std::string& old_entry) { return old_entry.rfind(prefix, 0) == 0; });
+            guest_env.push_back(entry);
+            log("zb-env.txt: guest environment %s", entry.c_str());
+        }
+        std::fclose(env_file);
+    }
+    const std::uint32_t sp = build_initial_stack(mem_, kStackTop, argv, guest_env, auxv, exe_path_);
     if (sp == 0) {
         log("arguments and environment do not fit on the guest stack");
         return 1;
