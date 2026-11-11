@@ -1,6 +1,11 @@
 // Native registration and the Java -> guest dispatcher.
 #include "host_jni_internal.h"
 
+#include <sched.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string_view>
@@ -8,6 +13,7 @@
 #include "zb/fbo_scaler.h"
 #include "zb/jni_shorty.h"
 #include "zb/log.h"
+#include "zb/options.h"
 #include "zb/runtime_report.h"
 
 namespace zb {
@@ -18,6 +24,51 @@ namespace {
 
 std::atomic<HostJni::Impl*> g_jni{nullptr};
 
+// pin_big_cores=1 (default): the thread that runs the game's nativeRender is the bottleneck of
+// single-threaded engines (Unity 3.5, Gameloft Storm). Keep it on the fastest CPU cores so the
+// scheduler never leaves it on a little core. The cores are found from cpuinfo_max_freq; if that
+// cannot be read, nothing is pinned.
+std::uint64_t big_core_mask() {
+    static const std::uint64_t mask = [] {
+        long max_freq[64] = {};
+        long best = 0;
+        const long cpus = std::min<long>(sysconf(_SC_NPROCESSORS_CONF), 64);
+        for (long i = 0; i < cpus; ++i) {
+            char path[96];
+            std::snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%ld/cpufreq/cpuinfo_max_freq", i);
+            if (FILE* file = std::fopen(path, "r")) {
+                long value = 0;
+                if (std::fscanf(file, "%ld", &value) == 1) max_freq[i] = value;
+                std::fclose(file);
+            }
+            best = std::max(best, max_freq[i]);
+        }
+        if (best <= 0) return std::uint64_t{0};
+        std::uint64_t bits = 0;
+        for (long i = 0; i < cpus; ++i) {
+            if (max_freq[i] * 100 >= best * 80) bits |= std::uint64_t{1} << i;  // prime + big cores
+        }
+        // every core is equally fast: nothing to choose
+        return bits == ((cpus >= 64) ? ~std::uint64_t{0} : ((std::uint64_t{1} << cpus) - 1)) ? std::uint64_t{0} : bits;
+    }();
+    return mask;
+}
+
+void pin_current_thread_to_big_cores() {
+    static const bool enabled = option_enabled("pin_big_cores", true);
+    if (!enabled) return;
+    const std::uint64_t bits = big_core_mask();
+    if (bits == 0) return;
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    for (int i = 0; i < 64; ++i) {
+        if (bits & (std::uint64_t{1} << i)) CPU_SET(i, &set);
+    }
+    if (sched_setaffinity(0, sizeof set, &set) == 0) {
+        log("pin_big_cores: render thread kept on cpu mask %llx", static_cast<unsigned long long>(bits));
+    }
+}
+
 // Receives every thunk call: runs the slot's guest function for the calling Java thread.
 void dispatch_native(std::uint32_t slot, NativeRegs& regs) {
     HostJni::Impl* jni = g_jni.load();
@@ -25,6 +76,11 @@ void dispatch_native(std::uint32_t slot, NativeRegs& regs) {
     // A native entry point that means "new GL surface / context": the GL state cache starts again.
     if (target != nullptr) {
         const std::string_view name = target->label;
+        static thread_local bool pin_checked = false;
+        if (!pin_checked && name.size() >= 12 && name.substr(name.size() - 12) == "nativeRender") {
+            pin_checked = true;  // the JIT runs on this (Java) thread, so this is the render thread
+            pin_current_thread_to_big_cores();
+        }
         if (name.find("Init") != std::string_view::npos || name.find("Resume") != std::string_view::npos ||
             name.find("Surface") != std::string_view::npos || name.find("Resize") != std::string_view::npos ||
             name.find("Created") != std::string_view::npos) {

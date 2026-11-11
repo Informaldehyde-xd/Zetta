@@ -1,0 +1,38 @@
+diff --git a/src/dynarmic/backend/arm64/a32_address_space.cpp b/src/dynarmic/backend/arm64/a32_address_space.cpp
+index 0ef8b23..64d5641 100644
+--- a/src/dynarmic/backend/arm64/a32_address_space.cpp
++++ b/src/dynarmic/backend/arm64/a32_address_space.cpp
+@@ -310,7 +310,9 @@ void A32AddressSpace::EmitPrelude() {
+     {
+         oaknut::Label l_this, l_addr;
+ 
+-        code.LDAR(Wscratch0, Xhalt);
++        // A plain load is enough: whoever halts the JIT only has to be seen "soon". The exit path
++        // (return_from_run_code) reads the flag again with LDAXR, which is where the acquire happens.
++        code.LDR(Wscratch0, Xhalt);
+         code.CBNZ(Wscratch0, return_from_run_code);
+ 
+         if (conf.enable_cycle_counting) {
+diff --git a/src/dynarmic/backend/arm64/emit_arm64_a32.cpp b/src/dynarmic/backend/arm64/emit_arm64_a32.cpp
+index 909dde7..313921a 100644
+--- a/src/dynarmic/backend/arm64/emit_arm64_a32.cpp
++++ b/src/dynarmic/backend/arm64/emit_arm64_a32.cpp
+@@ -69,7 +69,8 @@ void EmitA32Terminal(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Term::Li
+             code.B(LE, fail);
+             EmitBlockLinkRelocation(code, ctx, terminal.next, BlockRelocationType::Branch);
+         } else {
+-            code.LDAR(Wscratch0, Xhalt);
++            // plain load: the exit path (return_from_run_code) does the acquire with LDAXR
++            code.LDR(Wscratch0, Xhalt);
+             code.CBNZ(Wscratch0, fail);
+             EmitBlockLinkRelocation(code, ctx, terminal.next, BlockRelocationType::Branch);
+         }
+@@ -142,7 +143,7 @@ void EmitA32Terminal(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Term::Ch
+ 
+ void EmitA32Terminal(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Term::CheckHalt terminal, IR::LocationDescriptor initial_location, bool is_single_step) {
+     oaknut::Label fail;
+-    code.LDAR(Wscratch0, Xhalt);
++    code.LDR(Wscratch0, Xhalt);  // plain load, see the block link check above
+     code.CBNZ(Wscratch0, fail);
+     EmitA32Terminal(code, ctx, terminal.else_, initial_location, is_single_step);
+     code.l(fail);
