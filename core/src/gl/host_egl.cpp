@@ -23,6 +23,15 @@ namespace {
 
 // The handle (guest-side value) of the most recent eglCreateContext result, for the swap recovery below.
 std::atomic<std::uint32_t> g_last_context_handle{0};
+std::atomic<std::uint32_t> g_last_surface_handle{0};
+std::atomic<std::uint32_t> g_last_display_handle{0};
+std::atomic<std::uint32_t> g_egl_state_version{1};  // bumps whenever one of the three handles changes
+
+void remember_handle(std::atomic<std::uint32_t>& slot, std::uint32_t value) {
+    if (value != 0 && slot.exchange(value, std::memory_order_relaxed) != value) {
+        g_egl_state_version.fetch_add(1, std::memory_order_relaxed);
+    }
+}
 
 // EGL errors are per-thread and sticky until eglGetError reads them. A call rejected here never
 // reaches the driver, so its error is recorded on this side and shadows the driver's.
@@ -231,6 +240,36 @@ std::string egl_recent_calls() {
     return out;
 }
 
+bool HostEgl::make_current_on_caller_thread() {
+    if (reinterpret_cast<std::uintptr_t>(backend_.eglGetCurrentContext()) != 0) return true;
+    // Nothing new since this thread's last failed attempt: do not repeat it on every GL call.
+    static thread_local std::uint32_t tried_version = 0;
+    const std::uint32_t version = g_egl_state_version.load(std::memory_order_relaxed);
+    if (tried_version == version) return false;
+    tried_version = version;
+    const std::uint32_t context_handle = g_last_context_handle.load(std::memory_order_relaxed);
+    const std::uint32_t surface_handle = g_last_surface_handle.load(std::memory_order_relaxed);
+    const std::uint32_t display_handle = g_last_display_handle.load(std::memory_order_relaxed);
+    if (context_handle == 0 || surface_handle == 0 || display_handle == 0) {
+        static std::atomic<bool> noted{false};
+        if (!noted.exchange(true)) log("EGL: GL used on a thread with no EGL context current and no game context to make current yet");
+        return false;
+    }
+    const auto context = lookup(context_handle, EglObject::Context);
+    const auto surface = lookup(surface_handle, EglObject::Surface);
+    const auto display = lookup(display_handle, EglObject::Display);
+    if (!context || !surface || !display || *context == nullptr || *surface == nullptr || *display == nullptr) return false;
+    if (!backend_.eglMakeCurrent(const_cast<EGLDisplay>(*display), const_cast<EGLSurface>(*surface),
+                                 const_cast<EGLSurface>(*surface), const_cast<EGLContext>(*context))) {
+        return false;
+    }
+    static std::atomic<bool> made{false};
+    if (!made.exchange(true)) log("EGL: made the game's context current on GL thread tid=%ld", static_cast<long>(::syscall(SYS_gettid)));
+    runtime_report().note_egl_current(static_cast<std::uint64_t>(::syscall(SYS_gettid)));
+    if (fbo_scaler_enabled() && fbo_scaler_hooks().made_current != nullptr) fbo_scaler_hooks().made_current();
+    return true;
+}
+
 bool HostEgl::handle_host_call(std::uint32_t index, GuestThread& thread) {
     if (index < kEglHostCallFirst || index > kEglHostCallLast) return false;
     // A rejection never reaches the driver, so its error is served from here and takes
@@ -270,7 +309,12 @@ bool HostEgl::handle_host_call(std::uint32_t index, GuestThread& thread) {
     Call call(*this, thread, index);
     if (dispatch(call)) {
         if (index == ZB_EGL_HC_eglCreateContext && thread.regs()[0] != 0) {
-            g_last_context_handle.store(thread.regs()[0], std::memory_order_relaxed);
+            remember_handle(g_last_context_handle, thread.regs()[0]);
+        }
+        // The display and surface the game last made current / swapped (for make_current_on_caller_thread).
+        if ((index == ZB_EGL_HC_eglMakeCurrent || index == ZB_EGL_HC_eglSwapBuffers) && thread.regs()[0] != 0) {
+            remember_handle(g_last_display_handle, call.arg(0));
+            remember_handle(g_last_surface_handle, call.arg(1));
         }
         // FBO screen scaler: the game's context just became current on its window surface.
         if (index == ZB_EGL_HC_eglMakeCurrent && thread.regs()[0] != 0 && fbo_scaler_enabled()) {

@@ -346,6 +346,15 @@ void dup_report(DupCache& cache) {
 }  // namespace
 
 bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
+    // A game that calls GL from a thread of its own before any context is current there (Marmalade,
+    // Peggle) would get NULL from the driver and crash. Until this thread has a context, make the
+    // game's own one current here. Games that already have one never pay for more than this latch.
+    if (ensure_context_) {
+        static thread_local bool has_context = false;
+        if (!has_context) {
+            if (egl_context() != 0 || ensure_context_()) has_context = true;
+        }
+    }
     // OpenGL ES 1.x fixed-function names (old Unity 3.x games) live outside the GLES 2.0/3.0 ranges.
     if (!is_gl_host_call(index)) return gles1_handle_host_call(*this, index, thread);
     const char* name = gl_host_call_name(index);

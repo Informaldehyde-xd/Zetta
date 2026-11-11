@@ -120,6 +120,8 @@ public:
     LibraryRuntime& runtime() { return runtime_; }
     GlBackend& backend() { return backend_; }
     std::uintptr_t egl_context() const { return egl_context_probe_ ? egl_context_probe_() : 0; }
+    // Called when a GL call arrives on a thread with no EGL context current (see HostEgl::make_current_on_caller_thread).
+    void set_ensure_context(std::function<bool()> ensure) { ensure_context_ = std::move(ensure); }
     void reject(Call& call, GLenum error, const char* reason);
     void note_pixel_store(GLenum pname, GLint param);
     void note_bind_buffer(GLenum target, GLuint buffer);
@@ -142,6 +144,7 @@ private:
     GlBackend& backend_;
     GuestAllocator allocator_;
     EglContextProbe egl_context_probe_;
+    std::function<bool()> ensure_context_;
     bool gl_first_call_noted_ = false;
     std::uint32_t gl_calls_pending_ = 0;
     bool egl_context_checked_ = false;

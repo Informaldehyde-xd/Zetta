@@ -443,6 +443,10 @@ GuestJniEngine::GuestJniEngine(JniBackend& backend, GlBackend* gl_backend, HostG
             windows = [host_windows](std::uint32_t handle) { return host_windows->value_for(handle); };
         }
         host_egl_ = new HostEgl(*runtime_, *egl_backend, HostEgl::GuestAllocator{}, std::move(windows));
+        if (host_gl_ != nullptr) {
+            HostEgl* egl_for_gl = host_egl_;
+            host_gl_->set_ensure_context([egl_for_gl]() { return egl_for_gl->make_current_on_caller_thread(); });
+        }
     }
     HostJni* host_jni = host_jni_;
     HostGl* host_gl = host_gl_;

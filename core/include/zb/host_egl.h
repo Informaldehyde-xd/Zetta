@@ -135,6 +135,11 @@ public:
 
     // Serves the EGL range 168-211 and returns false for every other index.
     bool handle_host_call(std::uint32_t index, GuestThread& thread);
+    // Marmalade-style games probe GL (glGetString) from a native thread of their own before any EGL
+    // context is current on it. Makes the game's own context current on the calling thread, using the
+    // handles of its last eglCreateContext / eglMakeCurrent / eglSwapBuffers. True when the thread
+    // has a context afterwards; false (nothing changed) when there is nothing to make current yet.
+    bool make_current_on_caller_thread();
     LibraryRuntime& runtime() { return runtime_; }
     EglBackend& backend() { return backend_; }
     void reject(Call& call, EGLint error, const char* reason);
