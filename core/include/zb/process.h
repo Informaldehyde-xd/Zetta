@@ -153,6 +153,8 @@ public:
 
     // Drops translated code for the range in every thread.
     void invalidate(std::uint32_t addr, std::uint32_t len);
+    // The busiest flushed regions, written to the runtime report (called now and then by invalidate).
+    void report_flush_regions() const;
     // Points the game libraries' imports of memcpy, memset, inflate, ... at the faster functions the guest
     // registered (see import_patch.h). Called about once a second from a helper thread.
     void patch_imports();

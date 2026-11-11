@@ -268,14 +268,60 @@ void Process::request_exit(int status) {
     runtime_report().note_guest_exit("guest exited with status " + std::to_string(status));
 }
 
+namespace {
+// Flush profile: which 256 KB regions of the guest memory get cache-flush calls, and how many of them
+// held code (real) or not (skipped). The busiest regions go to zb-runtime-report.txt ("flush-regions").
+constexpr unsigned kFlushShift = 18;
+constexpr std::size_t kFlushBuckets = std::size_t{1} << (32 - kFlushShift);
+struct FlushBucket {
+    std::atomic<std::uint32_t> real{0};
+    std::atomic<std::uint32_t> skipped{0};
+    std::atomic<std::uint64_t> bytes{0};
+};
+FlushBucket g_flush_buckets[kFlushBuckets];
+std::atomic<std::uint64_t> g_flush_calls{0};
+}  // namespace
+
+void Process::report_flush_regions() const {
+    struct Row {
+        std::size_t bucket;
+        std::uint32_t real, skipped;
+        std::uint64_t bytes;
+    };
+    std::vector<Row> rows;
+    for (std::size_t i = 0; i < kFlushBuckets; ++i) {
+        const std::uint32_t real = g_flush_buckets[i].real.load(std::memory_order_relaxed);
+        const std::uint32_t skipped = g_flush_buckets[i].skipped.load(std::memory_order_relaxed);
+        if (real + skipped == 0) continue;
+        rows.push_back({i, real, skipped, g_flush_buckets[i].bytes.load(std::memory_order_relaxed)});
+    }
+    std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.real + a.skipped > b.real + b.skipped; });
+    std::string text;
+    for (std::size_t i = 0; i < rows.size() && i < 5; ++i) {
+        const Row& row = rows[i];
+        const std::uint32_t address = static_cast<std::uint32_t>(row.bucket << kFlushShift);
+        char line[200];
+        std::snprintf(line, sizeof line, "%s0x%08x %s: %u real + %u skipped, %llu bytes each", i ? "; " : "", address,
+                      describe_address(address).c_str(), row.real, row.skipped,
+                      static_cast<unsigned long long>(row.bytes / std::max<std::uint32_t>(1, row.real + row.skipped)));
+        text += line;
+    }
+    runtime_report().note_gl_detail("flush-regions", text, true);
+}
+
 void Process::invalidate(std::uint32_t addr, std::uint32_t len) {
     // Memory that no instruction was ever fetched from holds no translated code: nothing to throw away.
     // (invalidate_only_code=0 in zb-options.txt goes back to flushing every range.)
     static const bool only_code = option_enabled("invalidate_only_code", true);
+    FlushBucket& bucket = g_flush_buckets[addr >> kFlushShift];
+    bucket.bytes.fetch_add(len, std::memory_order_relaxed);
+    if ((g_flush_calls.fetch_add(1, std::memory_order_relaxed) & 0x7FF) == 0x7FF) report_flush_regions();
     if (only_code && !code_in_range(addr, len)) {
+        bucket.skipped.fetch_add(1, std::memory_order_relaxed);
         note_invalidation(true);
         return;
     }
+    bucket.real.fetch_add(1, std::memory_order_relaxed);
     note_invalidation(false);
     std::lock_guard<std::mutex> lock(threads_mutex_);
     for (GuestThread* t : threads_) t->invalidate(addr, len);

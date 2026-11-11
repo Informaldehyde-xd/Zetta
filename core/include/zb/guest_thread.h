@@ -56,7 +56,7 @@ void note_atomic_store(std::uint32_t vaddr, std::int32_t tid, std::uint32_t valu
 std::vector<AtomicWordInfo> hot_atomic_words(std::size_t most);
 std::uint32_t process_uptime_ms();
 
-// Which 64-byte lines of the guest's memory have ever had an instruction fetched from them (that is, the
+// Which 8-byte lines of the guest's memory have ever had an instruction fetched from them (that is, the
 // translator may hold translated code for them). A memory-map call or cache flush on a range with no such
 // line need not touch any thread's code cache. Mono's compiler adds each new method next to code that has
 // already run, so a finer map than whole pages is what lets those flushes be skipped.
