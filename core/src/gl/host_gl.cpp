@@ -397,10 +397,7 @@ bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
             if (egl_context() != 0 || ensure_context_()) has_context = true;
         }
     }
-    if (index == ZB_GL_HC_glViewport || index == ZB_GL_HC_glScissor) {
-        record_rect(index == ZB_GL_HC_glViewport ? 'V' : 'S', static_cast<int>(call.arg(0)), static_cast<int>(call.arg(1)),
-                    static_cast<int>(call.arg(2)), static_cast<int>(call.arg(3)));
-    }
+    
     // OpenGL ES 1.x fixed-function names (old Unity 3.x games) live outside the GLES 2.0/3.0 ranges.
     if (!is_gl_host_call(index)) return gles1_handle_host_call(*this, index, thread);
     const char* name = gl_host_call_name(index);
@@ -428,6 +425,11 @@ bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
     }
     
     Call call(*this, thread, index);
+    
+   if (index == ZB_GL_HC_glViewport || index == ZB_GL_HC_glScissor) {
+        record_rect(index == ZB_GL_HC_glViewport ? 'V' : 'S', static_cast<int>(call.arg(0)), static_cast<int>(call.arg(1)),
+                    static_cast<int>(call.arg(2)), static_cast<int>(call.arg(3)));
+    }
 
     // --- INTERCEPT DXT5 TEXTURES (0x83F3) ---
     if (std::strcmp(name, "glCompressedTexImage2D") == 0) {
