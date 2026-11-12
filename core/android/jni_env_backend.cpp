@@ -641,7 +641,9 @@ JValue JniEnvBackend::call_method(Env env, JniCallKind kind, char type, Ref obj,
     if (type == 'I' && m != nullptr && (m == g_display_get_width.load(std::memory_order_relaxed) || m == g_display_get_height.load(std::memory_order_relaxed))) {
         // FBO screen scaler (fbo_scale=1 or the older spoof_gameloft_res=1): Display.getWidth/getHeight
         // answer with the fixed size, like eglQuerySurface does.
-        if (fbo_scaler_enabled()) {
+        int spoof_width = 0;
+        int spoof_height = 0;
+        if (fbo_display_spoof(&spoof_width, &spoof_height)) {
             jclass display = g_display_class.load(std::memory_order_acquire);
             if (display == nullptr) {
                 jclass local = e->FindClass("android/view/Display");
@@ -652,7 +654,7 @@ JValue JniEnvBackend::call_method(Env env, JniCallKind kind, char type, Ref obj,
                 }
             }
             if (display != nullptr && e->IsInstanceOf(O(obj), display) == JNI_TRUE) {
-                out.i = (m == g_display_get_width.load(std::memory_order_relaxed)) ? fbo_config().width : fbo_config().height;
+                out.i = (m == g_display_get_width.load(std::memory_order_relaxed)) ? spoof_width : spoof_height;
                 return out;
             }
         }

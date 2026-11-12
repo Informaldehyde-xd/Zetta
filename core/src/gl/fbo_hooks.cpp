@@ -29,6 +29,32 @@ const FboConfig& fbo_config() {
     return config;
 }
 
+bool fbo_display_spoof(int* width, int* height) {
+    struct Spoof {
+        bool on;
+        int width;
+        int height;
+    };
+    static const Spoof spoof = [] {
+        Spoof result{};
+        const FboConfig& fbo = fbo_config();
+        if (fbo.on) {
+            result = {true, fbo.width, fbo.height};
+        } else {
+            const int window_width = option_number("window_width", 0);
+            const int window_height = option_number("window_height", 0);
+            if (window_width >= 160 && window_height >= 160 && option_enabled("window_spoof_display", true)) {
+                result = {true, clamp_size(window_width, 1280), clamp_size(window_height, 720)};
+            }
+        }
+        return result;
+    }();
+    if (!spoof.on) return false;
+    *width = spoof.width;
+    *height = spoof.height;
+    return true;
+}
+
 FboScalerHooks& fbo_scaler_hooks() {
     static FboScalerHooks hooks;
     return hooks;

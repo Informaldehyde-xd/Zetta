@@ -571,8 +571,21 @@ void GuestThread::InterpreterFallback(std::uint32_t pc, std::size_t num_instruct
     halt();
 }
 
+namespace {
+std::atomic<InlineSvcHandler> g_inline_svc{nullptr};
+}  // namespace
+
+void set_inline_svc_handler(InlineSvcHandler handler) {
+    g_inline_svc.store(handler, std::memory_order_relaxed);
+}
+
 void GuestThread::CallSVC(std::uint32_t swi) {
     if (pending_.kind == StopKind::None) {
+        // A call the hook serves completely (gl_inline_calls) needs no exit from translated code: the
+        // JIT goes on with the next block. Anything else stops the JIT and is served by the run loop.
+        if (const InlineSvcHandler handler = g_inline_svc.load(std::memory_order_relaxed)) {
+            if (handler(*this, swi)) return;
+        }
         pending_.kind = StopKind::Svc;
         pending_.swi = swi;
     }

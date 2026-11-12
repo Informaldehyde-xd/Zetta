@@ -153,6 +153,9 @@ public:
 
     // Drops translated code for the range in every thread.
     void invalidate(std::uint32_t addr, std::uint32_t len);
+    // gl_inline_calls=1: serves a whitelisted GL host call inside the translator's svc callback
+    // (see set_inline_svc_handler). False when the call is not one of them; it is then served the usual way.
+    bool serve_inline_host_call(GuestThread& thread, std::uint32_t swi);
     // The busiest flushed regions, written to the runtime report (called now and then by invalidate).
     void report_flush_regions() const;
     // Points the game libraries' imports of memcpy, memset, inflate, ... at the faster functions the guest

@@ -45,6 +45,10 @@ struct FboScalerHooks {
 };
 FboScalerHooks& fbo_scaler_hooks();
 
+// Display.getWidth/getHeight answer for the Java side: the FBO scaler's size, or width x height of the
+// "exact window" mode (window_width / window_height in zb-options.txt, window_spoof_display=1 by default).
+bool fbo_display_spoof(int* width, int* height);
+
 // The window surface the game draws to (the newest one created).
 void fbo_note_window_surface(const void* surface);
 bool fbo_is_window_surface(const void* surface);

@@ -11,6 +11,7 @@
 #include <unwind.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <exception>
@@ -42,6 +43,7 @@
 #include "profile_extra.h"
 #include "zb/diagnostics.h"
 #include "zb/external_dir.h"
+#include "zb/gl_hostcalls.h"
 #include "zb/options.h"
 #include "zb/perf_hint.h"
 #include "zb/runtime_report.h"
@@ -167,6 +169,42 @@ inline void account_host_call(std::uint32_t index, std::uint64_t started) {
     const std::uint64_t elapsed = read_ticks() - started;
     g_host_call_count[index & 0xFFFF].fetch_add(1, std::memory_order_relaxed);
     g_host_call_ticks[index & 0xFFFF].fetch_add(elapsed, std::memory_order_relaxed);
+}
+
+// ---- gl_inline_calls ------------------------------------------------------------------------------
+// GL calls that only do GL work: no guest code is run for them (so they may run inside the translator's
+// own callback), and none of them blocks. Everything else, including glGetString (which calls the
+// guest's malloc) and all system calls, keeps leaving translated code as before.
+bool is_inline_gl_call(std::uint32_t index) {
+    static const std::array<bool, 512> table = [] {
+        static constexpr const char* kNames[] = {
+            "glActiveTexture", "glBindBuffer", "glBindTexture", "glBlendEquation", "glBlendEquationSeparate",
+            "glBlendFunc", "glBlendFuncSeparate", "glClear", "glClearColor", "glClearDepthf", "glClearStencil",
+            "glColorMask", "glCullFace", "glDepthFunc", "glDepthMask", "glDepthRangef", "glDisable", "glEnable",
+            "glFrontFace", "glLineWidth", "glPolygonOffset", "glScissor", "glStencilFunc", "glStencilMask",
+            "glStencilOp", "glUseProgram", "glViewport", "glEnableVertexAttribArray", "glDisableVertexAttribArray",
+            "glVertexAttribPointer", "glUniform1i", "glUniform1f", "glUniform2f", "glUniform3f", "glUniform4f",
+            "glUniform1fv", "glUniform2fv", "glUniform3fv", "glUniform4fv", "glUniformMatrix3fv",
+            "glUniformMatrix4fv", "glDrawArrays", "glDrawElements", "glBindFramebuffer", "glBindRenderbuffer",
+        };
+        std::array<bool, 512> result{};
+        for (std::uint32_t i = 0; i < result.size(); ++i) {
+            if (!is_gl_host_call(i)) continue;
+            const char* name = gl_host_call_name(i);
+            for (const char* wanted : kNames) {
+                if (std::strcmp(name, wanted) == 0) result[i] = true;
+            }
+        }
+        return result;
+    }();
+    return index < table.size() && table[index];
+}
+
+Process* g_inline_process = nullptr;
+
+bool inline_svc_trampoline(GuestThread& thread, std::uint32_t swi) {
+    if ((swi & 0xFF0000u) != kHostCallBase || !is_inline_gl_call(swi & 0xFFFFu)) return false;
+    return g_inline_process != nullptr && g_inline_process->serve_inline_host_call(thread, swi);
 }
 
 }  // namespace
@@ -637,6 +675,13 @@ int Process::run(const std::string& path, const std::vector<std::string>& argv, 
         {AT_CLKTCK, 100},
         {AT_SECURE, 0},
     };
+    // gl_inline_calls=1: serve the simple GL calls inside the translator's svc callback (no exit and
+    // re-entry per call). Off by default.
+    if (option_enabled("gl_inline_calls", false)) {
+        g_inline_process = this;
+        set_inline_svc_handler(&inline_svc_trampoline);
+        log("gl_inline_calls: simple GL calls are served inside translated code");
+    }
     // zb-env.txt (launcher's external files folder): one NAME=VALUE per line, added to the guest's
     // environment (replacing a variable of the same name). For runtime settings such as the garbage
     // collector's GC_* variables. Lines starting with # are ignored.
@@ -694,6 +739,33 @@ int Process::run(const std::string& path, const std::vector<std::string>& argv, 
     set_current_thread(nullptr);
     wait_for_threads();
     return exiting_ ? exit_status_.load() : main_status;
+}
+
+bool Process::serve_inline_host_call(GuestThread& thread, std::uint32_t swi) {
+    const std::uint32_t index = swi & 0xFFFFu;
+    record_thread_activity(thread.tid, ThreadActivityKind::kHostCall, index);
+    const std::uint64_t started = read_ticks();
+    bool served = false;
+    try {
+        served = host_call_handler_ && host_call_handler_(index, thread);
+    } catch (...) {
+        // Same as the run loop's path: name the call, then stop the process.
+        const auto [failed_library, failed_name] = host_call_name(index);
+        log("host call %s threw (inline)", failed_name);
+        runtime_report().note_jni_detail("host-call-threw", std::string(failed_library) + ":" + failed_name, true);
+        record_thread_activity_done(thread.tid);
+        request_exit(70);
+        return true;  // the next real stop ends the thread: exiting_ is set
+    }
+    account_host_call(index, started);
+    if (!served) {
+        const auto [library, name] = host_call_name(index);
+        if (first_time(kSeenHostCall | index)) log("host call %s:%s is not implemented yet", library, name);
+        runtime_report().note_unimplemented_host_call(index, library, name);
+        thread.regs()[0] = 0;
+    }
+    record_thread_activity_done(thread.tid);
+    return true;
 }
 
 bool Process::dispatch_stop(GuestThread& thread, const Stop& stop) {

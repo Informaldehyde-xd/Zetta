@@ -95,6 +95,13 @@ using GuestStopHandler = std::function<bool(const Stop&)>;
 
 // One guest CPU context on one host thread. Dynarmic callbacks never do host work: they
 // record a Stop and halt the JIT; the caller of run() handles it and calls run() again.
+// Optional hook that serves a supervisor call (svc) right inside the translator's callback, so the
+// thread never leaves translated code for it. Returns true when it served the call completely.
+// Process installs one when zb-options.txt has gl_inline_calls=1.
+class GuestThread;
+using InlineSvcHandler = bool (*)(GuestThread& thread, std::uint32_t swi);
+void set_inline_svc_handler(InlineSvcHandler handler);
+
 class GuestThread final : public Dynarmic::A32::UserCallbacks {
 public:
     // precise_faults: a memory fault stops at the faulting instruction with all guest registers
