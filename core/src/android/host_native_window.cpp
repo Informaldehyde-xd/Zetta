@@ -1,5 +1,7 @@
 #include "zb/host_native_window.h"
 #include "zb/fbo_scaler.h"
+#include "zb/runtime_report.h"
+#include <string>
 
 #include <cstdint>
 
@@ -96,6 +98,7 @@ bool HostNativeWindow::handle_host_call(std::uint32_t index, GuestThread& thread
         const std::int32_t result =
             window != nullptr ? backend_.query(const_cast<void*>(window), NativeWindowBackend::Query::Width) : -1;
         regs[0] = static_cast<std::uint32_t>(fbo_scaler_enabled() && result > 0 ? fbo_config().width : result);
+        runtime_report().note_gl_detail("native-window-width-answer", std::to_string(static_cast<std::int32_t>(regs[0])), true);
         return true;
     }
     case ZB_WINDOW_HC_ANativeWindow_getHeight: {
@@ -103,6 +106,7 @@ bool HostNativeWindow::handle_host_call(std::uint32_t index, GuestThread& thread
         const std::int32_t result =
             window != nullptr ? backend_.query(const_cast<void*>(window), NativeWindowBackend::Query::Height) : -1;
         regs[0] = static_cast<std::uint32_t>(fbo_scaler_enabled() && result > 0 ? fbo_config().height : result);
+        runtime_report().note_gl_detail("native-window-height-answer", std::to_string(static_cast<std::int32_t>(regs[0])), true);
         return true;
     }
     case ZB_WINDOW_HC_ANativeWindow_getFormat: {

@@ -112,6 +112,10 @@ bool query_attribute(HostEgl& host, HostEgl::Call& call, EglObject kind) {
         result = host.backend().eglQuerySurface(dpy, object, attribute, value);
         // FBO screen scaler: the game is told its window has the fixed size.
         if (result != 0) fbo_spoof_surface_size(object, attribute, value);
+        if (result != 0 && (attribute == 0x3057 || attribute == 0x3056)) {
+            runtime_report().note_gl_detail(attribute == 0x3057 ? "egl-surface-width-answer" : "egl-surface-height-answer",
+                                            std::to_string(*value), true);
+        }
         // Records the surface size the first time the guest asks for it (Task 7): free
         // visibility into what got created, at the cost of no extra backend calls.
         if (result != 0 && (attribute == kEglWidthAttrib || attribute == kEglHeightAttrib)) {

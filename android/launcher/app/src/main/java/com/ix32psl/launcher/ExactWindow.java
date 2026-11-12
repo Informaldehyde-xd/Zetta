@@ -41,6 +41,21 @@ final class ExactWindow {
 
     private ExactWindow() {}
 
+    private static int traceLines = 0;
+
+    /** First lines of what happens to the screen and the touches: zb-touch.txt in the launcher's files folder. */
+    private static void trace(String text) {
+        if (traceLines >= 150) return;
+        traceLines++;
+        final File dir = Diagnostics.externalFilesDir();
+        if (dir == null) return;
+        try (java.io.FileWriter out = new java.io.FileWriter(new File(dir, "zb-touch.txt"), true)) {
+            out.write(text + "\n");
+        } catch (IOException e) {
+            // diagnostics only
+        }
+    }
+
     private static final class Setting {
         final int width;
         final int height;
@@ -107,6 +122,10 @@ final class ExactWindow {
         if (!(content instanceof ViewGroup)) return;
         final Window window = activity.getWindow();
         window.setBackgroundDrawable(new ColorDrawable(Color.BLACK));
+        final File old = Diagnostics.externalFilesDir() != null ? new File(Diagnostics.externalFilesDir(), "zb-touch.txt") : null;
+        if (old != null) old.delete();
+        traceLines = 0;
+        trace("exact window " + wantedWidth + "x" + wantedHeight + (scaleMode ? " scaled" : " 1:1") + " in " + activity.getClass().getName());
 
         // 1. size and centre the game's area (the rest is the black window)
         content.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
@@ -132,6 +151,12 @@ final class ExactWindow {
                 if (v.getPaddingLeft() != padLeft || v.getPaddingTop() != padTop
                         || v.getPaddingRight() != padRight || v.getPaddingBottom() != padBottom) {
                     v.setPadding(padLeft, padTop, padRight, padBottom);
+                    final int[] at = new int[2];
+                    v.getLocationOnScreen(at);
+                    final SurfaceView game = findSurfaceView(v);
+                    trace("layout: content " + fullWidth + "x" + fullHeight + " at screen " + at[0] + "," + at[1]
+                            + " padding L" + padLeft + " T" + padTop + " R" + padRight + " B" + padBottom
+                            + (game != null ? " surfaceview " + game.getWidth() + "x" + game.getHeight() : " no surfaceview yet"));
                 }
             }
         });
@@ -222,11 +247,26 @@ final class ExactWindow {
                                 }
                             }
                             if (event.getActionMasked() == MotionEvent.ACTION_DOWN) activity.onUserInteraction();
-                            if (window.superDispatchTouchEvent(forViews)) return Boolean.TRUE;
+                            final boolean notable = event.getActionMasked() == MotionEvent.ACTION_DOWN
+                                    || event.getActionMasked() == MotionEvent.ACTION_UP;
+                            if (window.superDispatchTouchEvent(forViews)) {
+                                if (notable) {
+                                    trace("touch " + event.getActionMasked() + " raw " + (int) event.getX() + "," + (int) event.getY()
+                                            + " origin " + (int) originX + "," + (int) originY + " scale " + scaleX + "," + scaleY
+                                            + " views got " + (int) forViews.getX() + "," + (int) forViews.getY() + " -> consumed by a view");
+                                }
+                                return Boolean.TRUE;
+                            }
                             // the activity's own onTouchEvent gets window coordinates without the border
                             final MotionEvent moved = shifted(forViews, originX, originY);
                             try {
-                                return activity.onTouchEvent(moved);
+                                final boolean handled = activity.onTouchEvent(moved);
+                                if (notable) {
+                                    trace("touch " + event.getActionMasked() + " raw " + (int) event.getX() + "," + (int) event.getY()
+                                            + " origin " + (int) originX + "," + (int) originY + " scale " + scaleX + "," + scaleY
+                                            + " activity got " + (int) moved.getX() + "," + (int) moved.getY() + " handled " + handled);
+                                }
+                                return handled;
                             } finally {
                                 moved.recycle();
                             }

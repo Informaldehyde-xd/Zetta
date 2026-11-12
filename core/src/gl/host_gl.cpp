@@ -345,6 +345,48 @@ void dup_report(DupCache& cache) {
 
 }  // namespace
 
+// Which viewport / scissor rectangles the game really sets (and how often): written to the runtime report as
+// "gl-viewports". Cheap: a handful of integer compares per glViewport / glScissor.
+namespace {
+struct RectRecord {
+    char kind;
+    int x, y, w, h;
+    std::uint64_t count;
+};
+RectRecord g_rects[24];
+int g_rect_count = 0;
+std::uint64_t g_rect_calls = 0;
+
+void record_rect(char kind, int x, int y, int w, int h) {
+    int slot = -1;
+    for (int i = 0; i < g_rect_count; ++i) {
+        const RectRecord& r = g_rects[i];
+        if (r.kind == kind && r.x == x && r.y == y && r.w == w && r.h == h) {
+            slot = i;
+            break;
+        }
+    }
+    bool is_new = false;
+    if (slot < 0 && g_rect_count < 24) {
+        slot = g_rect_count++;
+        g_rects[slot] = {kind, x, y, w, h, 0};
+        is_new = true;
+    }
+    if (slot >= 0) ++g_rects[slot].count;
+    if (is_new || (++g_rect_calls & 0x3FFF) == 0) {
+        std::string text;
+        for (int i = 0; i < g_rect_count; ++i) {
+            const RectRecord& r = g_rects[i];
+            char part[96];
+            std::snprintf(part, sizeof part, "%s%c %d,%d %dx%d x%llu", i ? "; " : "", r.kind, r.x, r.y, r.w, r.h,
+                          static_cast<unsigned long long>(r.count));
+            text += part;
+        }
+        runtime_report().note_gl_detail("gl-viewports", text, true);
+    }
+}
+}  // namespace
+
 bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
     // A game that calls GL from a thread of its own before any context is current there (Marmalade,
     // Peggle) would get NULL from the driver and crash. Until this thread has a context, make the
@@ -354,6 +396,10 @@ bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
         if (!has_context) {
             if (egl_context() != 0 || ensure_context_()) has_context = true;
         }
+    }
+    if (index == ZB_GL_HC_glViewport || index == ZB_GL_HC_glScissor) {
+        record_rect(index == ZB_GL_HC_glViewport ? 'V' : 'S', static_cast<int>(call.arg(0)), static_cast<int>(call.arg(1)),
+                    static_cast<int>(call.arg(2)), static_cast<int>(call.arg(3)));
     }
     // OpenGL ES 1.x fixed-function names (old Unity 3.x games) live outside the GLES 2.0/3.0 ranges.
     if (!is_gl_host_call(index)) return gles1_handle_host_call(*this, index, thread);

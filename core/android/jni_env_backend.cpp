@@ -655,6 +655,10 @@ JValue JniEnvBackend::call_method(Env env, JniCallKind kind, char type, Ref obj,
             }
             if (display != nullptr && e->IsInstanceOf(O(obj), display) == JNI_TRUE) {
                 out.i = (m == g_display_get_width.load(std::memory_order_relaxed)) ? spoof_width : spoof_height;
+                runtime_report().note_gl_detail("display-size-answer",
+                                                (m == g_display_get_width.load(std::memory_order_relaxed) ? "width " : "height ") +
+                                                    std::to_string(out.i),
+                                                true);
                 return out;
             }
         }
