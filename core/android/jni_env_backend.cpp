@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <optional>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -31,6 +32,33 @@ std::atomic<jmethodID> g_screen_dpi_method{nullptr};
 
 std::atomic<jmethodID> g_display_get_width{nullptr};
 std::atomic<jmethodID> g_swap_egl_buffers{nullptr};  // Gameloft: Java swaps EGL when asked by the guest
+
+// Every distinct Java method / field the guest looks up (M = method, F = field), for the runtime report line
+// "jni-java-names". It shows which Java calls a game uses to find out its screen size.
+std::mutex g_java_names_mutex;
+std::vector<std::string> g_java_names;
+
+void record_java_name(char kind, const char* name, const char* signature) {
+    if (name == nullptr || signature == nullptr) return;
+    std::lock_guard<std::mutex> lock(g_java_names_mutex);
+    if (g_java_names.size() >= 160) return;
+    std::string entry;
+    entry += kind;
+    entry += ' ';
+    entry += name;
+    entry += ' ';
+    entry += signature;
+    for (const std::string& known : g_java_names) {
+        if (known == entry) return;
+    }
+    g_java_names.push_back(entry);
+    std::string text;
+    for (std::size_t i = 0; i < g_java_names.size(); ++i) {
+        if (i != 0) text += "; ";
+        text += g_java_names[i];
+    }
+    runtime_report().note_gl_detail("jni-java-names", text, true);
+}
 std::atomic<jmethodID> g_display_get_height{nullptr};
 std::atomic<jclass> g_display_class{nullptr};
 float read_dpi_override() {
@@ -541,6 +569,7 @@ JniBackend::Id JniEnvBackend::get_method_id(Env env, Ref cls, const char* name, 
                                             bool is_static) {
     const jmethodID method = is_static ? E(env)->GetStaticMethodID(C(cls), name, signature)
                                        : E(env)->GetMethodID(C(cls), name, signature);
+    record_java_name(is_static ? 'S' : 'M', name, signature);
     if (!is_static && method != nullptr && name != nullptr && signature != nullptr) {
         if (std::strcmp(name, "getScreenDPI") == 0 && std::strcmp(signature, "()F") == 0) {
             g_screen_dpi_method.store(method);
@@ -557,6 +586,7 @@ JniBackend::Id JniEnvBackend::get_method_id(Env env, Ref cls, const char* name, 
 
 JniBackend::Id JniEnvBackend::get_field_id(Env env, Ref cls, const char* name, const char* signature,
                                            bool is_static) {
+    record_java_name(is_static ? 'G' : 'F', name, signature);
     return I(is_static ? E(env)->GetStaticFieldID(C(cls), name, signature)
                        : E(env)->GetFieldID(C(cls), name, signature));
 }

@@ -60,11 +60,13 @@ final class ExactWindow {
         final int width;
         final int height;
         final boolean scale;
+        final boolean spoofDisplay;
 
-        Setting(int width, int height, boolean scale) {
+        Setting(int width, int height, boolean scale, boolean spoofDisplay) {
             this.width = width;
             this.height = height;
             this.scale = scale;
+            this.spoofDisplay = spoofDisplay;
         }
     }
 
@@ -77,6 +79,7 @@ final class ExactWindow {
         int width = 0;
         int height = 0;
         boolean scale = false;
+        boolean spoofDisplay = true;
         try (BufferedReader in = new BufferedReader(new FileReader(file))) {
             String line;
             while ((line = in.readLine()) != null) {
@@ -88,6 +91,7 @@ final class ExactWindow {
                 try {
                     if (name.equals("window_width")) width = Integer.parseInt(value);
                     else if (name.equals("window_height")) height = Integer.parseInt(value);
+                    else if (name.equals("window_spoof_display")) spoofDisplay = !(value.isEmpty() || value.startsWith("0") || value.startsWith("n") || value.startsWith("f"));
                     else if (name.equals("window_scale")) scale = !(value.isEmpty() || value.startsWith("0") || value.startsWith("n") || value.startsWith("f"));
                 } catch (NumberFormatException e) {
                     // ignore a bad number
@@ -97,7 +101,7 @@ final class ExactWindow {
             return null;
         }
         if (width < 160 || height < 160) return null;
-        return new Setting(width, height, scale);
+        return new Setting(width, height, scale, spoofDisplay);
     }
 
     private static SurfaceView findSurfaceView(View view) {
@@ -118,6 +122,18 @@ final class ExactWindow {
         final int wantedWidth = setting.width;
         final int wantedHeight = setting.height;
         final boolean scaleMode = setting.scale;
+        // Java code that reads the screen from DisplayMetrics sees width x height too (like wm size).
+        // window_spoof_display=0 in zb-options.txt leaves the real size.
+        if (setting.spoofDisplay) {
+            try {
+                final android.util.DisplayMetrics metrics = activity.getResources().getDisplayMetrics();
+                trace("display metrics were " + metrics.widthPixels + "x" + metrics.heightPixels + " density " + metrics.density);
+                metrics.widthPixels = wantedWidth;
+                metrics.heightPixels = wantedHeight;
+            } catch (RuntimeException e) {
+                trace("display metrics: " + e);
+            }
+        }
         final View content = activity.findViewById(android.R.id.content);
         if (!(content instanceof ViewGroup)) return;
         final Window window = activity.getWindow();
