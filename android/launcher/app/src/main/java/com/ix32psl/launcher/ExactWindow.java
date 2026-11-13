@@ -71,12 +71,21 @@ final class ExactWindow {
         final int height;
         final boolean scale;
         final boolean spoofDisplay;
+        final int shiftX;
+        final int shiftY;
+        final int viewWidth;   // 0 = automatic fit
+        final int viewHeight;  // 0 = automatic fit
 
-        Setting(int width, int height, boolean scale, boolean spoofDisplay) {
+        Setting(int width, int height, boolean scale, boolean spoofDisplay, int shiftX, int shiftY, int viewWidth,
+                int viewHeight) {
             this.width = width;
             this.height = height;
             this.scale = scale;
             this.spoofDisplay = spoofDisplay;
+            this.shiftX = shiftX;
+            this.shiftY = shiftY;
+            this.viewWidth = viewWidth;
+            this.viewHeight = viewHeight;
         }
     }
 
@@ -90,6 +99,10 @@ final class ExactWindow {
         int height = 0;
         boolean scale = false;
         boolean spoofDisplay = true;
+        int shiftX = 0;
+        int shiftY = 0;
+        int viewWidth = 0;
+        int viewHeight = 0;
         try (BufferedReader in = new BufferedReader(new FileReader(file))) {
             String line;
             while ((line = in.readLine()) != null) {
@@ -101,6 +114,10 @@ final class ExactWindow {
                 try {
                     if (name.equals("window_width")) width = Integer.parseInt(value);
                     else if (name.equals("window_height")) height = Integer.parseInt(value);
+                    else if (name.equals("window_shift_x")) shiftX = Integer.parseInt(value);
+                    else if (name.equals("window_shift_y")) shiftY = Integer.parseInt(value);
+                    else if (name.equals("window_view_width")) viewWidth = Integer.parseInt(value);
+                    else if (name.equals("window_view_height")) viewHeight = Integer.parseInt(value);
                     else if (name.equals("window_spoof_display")) spoofDisplay = !(value.isEmpty() || value.startsWith("0") || value.startsWith("n") || value.startsWith("f"));
                     else if (name.equals("window_scale")) scale = !(value.isEmpty() || value.startsWith("0") || value.startsWith("n") || value.startsWith("f"));
                 } catch (NumberFormatException e) {
@@ -111,7 +128,7 @@ final class ExactWindow {
             return null;
         }
         if (width < 160 || height < 160) return null;
-        return new Setting(width, height, scale, spoofDisplay);
+        return new Setting(width, height, scale, spoofDisplay, shiftX, shiftY, viewWidth, viewHeight);
     }
 
     /** {width, height} the game's Java should see as the screen (window mode with window_spoof_display=1), or null. */
@@ -139,6 +156,8 @@ final class ExactWindow {
         final int wantedWidth = setting.width;
         final int wantedHeight = setting.height;
         final boolean scaleMode = setting.scale;
+        // live-adjustable: shift x, shift y, shown width, shown height (0 = automatic fit)
+        final int[] adjust = {setting.shiftX, setting.shiftY, scaleMode ? setting.viewWidth : 0, scaleMode ? setting.viewHeight : 0};
         // Java code that reads the screen from DisplayMetrics sees width x height too (like wm size).
         // window_spoof_display=0 in zb-options.txt leaves the real size.
         if (setting.spoofDisplay) {
@@ -172,11 +191,16 @@ final class ExactWindow {
                     final double scale = Math.min((double) fullWidth / wantedWidth, (double) fullHeight / wantedHeight);
                     viewWidth = (int) (wantedWidth * scale + 0.5);
                     viewHeight = (int) (wantedHeight * scale + 0.5);
+                    if (adjust[WindowAdjustPanel.VIEW_W] > 0) viewWidth = adjust[WindowAdjustPanel.VIEW_W];
+                    if (adjust[WindowAdjustPanel.VIEW_H] > 0) viewHeight = adjust[WindowAdjustPanel.VIEW_H];
                 }
                 viewWidth = Math.min(viewWidth, fullWidth);
                 viewHeight = Math.min(viewHeight, fullHeight);
-                final int padLeft = (fullWidth - viewWidth) / 2;
-                final int padTop = (fullHeight - viewHeight) / 2;
+                // centred, then moved by the shift (kept inside the screen)
+                final int padLeft = Math.max(0, Math.min(fullWidth - viewWidth,
+                        (fullWidth - viewWidth) / 2 + adjust[WindowAdjustPanel.SHIFT_X]));
+                final int padTop = Math.max(0, Math.min(fullHeight - viewHeight,
+                        (fullHeight - viewHeight) / 2 + adjust[WindowAdjustPanel.SHIFT_Y]));
                 final int padRight = fullWidth - viewWidth - padLeft;
                 final int padBottom = fullHeight - viewHeight - padTop;
                 if (v.getPaddingLeft() != padLeft || v.getPaddingTop() != padTop
@@ -192,6 +216,21 @@ final class ExactWindow {
             }
         });
         content.requestLayout();
+
+        // The adjust panel (four-finger tap opens and closes it).
+        final WindowAdjustPanel panel = new WindowAdjustPanel(activity, adjust, scaleMode, new Runnable() {
+            @Override
+            public void run() {
+                content.requestLayout();
+            }
+        }, new WindowAdjustPanel.SizeSource() {
+            @Override
+            public int[] current() {
+                return new int[] {content.getWidth() - content.getPaddingLeft() - content.getPaddingRight(),
+                        content.getHeight() - content.getPaddingTop() - content.getPaddingBottom()};
+            }
+        });
+        final boolean[] panelGesture = new boolean[1];
 
         // 2. scaled mode: the game's surface keeps width x height pixels, the compositor scales it up.
         //    It has to be set before the surface exists, so do it now and again for views added later.
@@ -229,7 +268,24 @@ final class ExactWindow {
                         try {
                             if ("dispatchTouchEvent".equals(method.getName()) && args != null && args.length == 1
                                     && args[0] instanceof MotionEvent) {
-                                return dispatchTouch((MotionEvent) args[0], method, original);
+                                final MotionEvent touch = (MotionEvent) args[0];
+                                final int action = touch.getActionMasked();
+                                // four fingers: show / hide the adjust panel
+                                if (action == MotionEvent.ACTION_POINTER_DOWN && touch.getPointerCount() >= 4) {
+                                    panel.toggle();
+                                    return Boolean.TRUE;
+                                }
+                                // touches that start on the panel belong to the panel: no mapping
+                                if (action == MotionEvent.ACTION_DOWN && panel.contains(touch.getX(), touch.getY())) {
+                                    panelGesture[0] = true;
+                                }
+                                if (panelGesture[0]) {
+                                    if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                                        panelGesture[0] = false;
+                                    }
+                                    return method.invoke(original, args);
+                                }
+                                return dispatchTouch(touch, method, original);
                             }
                             return method.invoke(original, args);
                         } catch (InvocationTargetException e) {
