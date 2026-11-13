@@ -163,6 +163,13 @@ final class PluginContext extends ContextWrapper {
             if (inflater == null) inflater = LayoutInflater.from(getBaseContext()).cloneInContext(this);
             return inflater;
         }
+        if (WINDOW_SERVICE.equals(name)) {
+            final Object windowManager = super.getSystemService(name);
+            if (windowManager instanceof android.view.WindowManager) {
+                return GuestDisplay.wrap((android.view.WindowManager) windowManager, getBaseContext());
+            }
+            return windowManager;
+        }
         return super.getSystemService(name);
     }
 

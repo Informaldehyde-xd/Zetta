@@ -42,9 +42,19 @@ final class ExactWindow {
     private ExactWindow() {}
 
     private static int traceLines = 0;
+    private static boolean traceReset = false;
+
+    /** Starts zb-touch.txt afresh, once per process (the first of GuestDisplay.install / apply to run). */
+    static synchronized void resetTraceOnce() {
+        if (traceReset) return;
+        traceReset = true;
+        final File dir = Diagnostics.externalFilesDir();
+        if (dir != null) new File(dir, "zb-touch.txt").delete();
+        traceLines = 0;
+    }
 
     /** First lines of what happens to the screen and the touches: zb-touch.txt in the launcher's files folder. */
-    private static void trace(String text) {
+    static void trace(String text) {
         if (traceLines >= 150) return;
         traceLines++;
         final File dir = Diagnostics.externalFilesDir();
@@ -104,6 +114,13 @@ final class ExactWindow {
         return new Setting(width, height, scale, spoofDisplay);
     }
 
+    /** {width, height} the game's Java should see as the screen (window mode with window_spoof_display=1), or null. */
+    static int[] displaySize() {
+        final Setting setting = read();
+        if (setting == null || !setting.spoofDisplay) return null;
+        return new int[] {setting.width, setting.height};
+    }
+
     private static SurfaceView findSurfaceView(View view) {
         if (view instanceof SurfaceView) return (SurfaceView) view;
         if (view instanceof ViewGroup) {
@@ -138,9 +155,7 @@ final class ExactWindow {
         if (!(content instanceof ViewGroup)) return;
         final Window window = activity.getWindow();
         window.setBackgroundDrawable(new ColorDrawable(Color.BLACK));
-        final File old = Diagnostics.externalFilesDir() != null ? new File(Diagnostics.externalFilesDir(), "zb-touch.txt") : null;
-        if (old != null) old.delete();
-        traceLines = 0;
+        resetTraceOnce();
         trace("exact window " + wantedWidth + "x" + wantedHeight + (scaleMode ? " scaled" : " 1:1") + " in " + activity.getClass().getName());
 
         // 1. size and centre the game's area (the rest is the black window)

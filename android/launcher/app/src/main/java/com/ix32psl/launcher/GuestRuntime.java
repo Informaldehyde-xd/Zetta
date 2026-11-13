@@ -235,6 +235,7 @@ final class GuestRuntime {
         int theme = ai != null ? ai.getThemeResource() : p.appInfo.theme;
         activity.setTheme(theme != 0 ? theme : GuestWindowStyle.defaultTheme(p.appInfo.targetSdkVersion));
 
+        GuestDisplay.install(activity);  // window_width / window_height: the game's Java sees that screen size
         GuestWindowStyle.apply(activity, p.record != null && p.record.isTranslated());
         if (p.record != null && p.record.hideAds) AdHider.attach(activity);
 
