@@ -21,6 +21,7 @@ add_library(zbcore STATIC
     src/gl/host_egl.cpp
     src/gl/host_gl.cpp
     src/gl/fbo_hooks.cpp
+    src/gl/texture_decode.cpp
     src/gl/host_gles1.cpp
     src/external_dir.cpp
     src/options.cpp
@@ -75,7 +76,7 @@ if (ANDROID)
     # libGLESv2.so; the NDK splits the stub libraries by version.
     # core/src for the generated dispatch and driver .inc files the Android backends include.
     target_include_directories(zbridge PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(zbridge PRIVATE zbcore GLESv2 GLESv3 GLESv1_CM EGL android)
+    target_link_libraries(zbridge PRIVATE zbcore GLESv2 GLESv3 EGL android)
     set_target_properties(zbridge PROPERTIES CXX_VISIBILITY_PRESET hidden)
     target_compile_definitions(zbridge PRIVATE ZB_EXPORT_C_API)
     # --exclude-libs keeps the statically linked libc++ and friends from being exported, so

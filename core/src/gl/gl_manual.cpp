@@ -2,6 +2,7 @@
 #include "zb/host_gl.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -12,6 +13,9 @@
 
 #include "gl/gl_diagnostics.h"
 #include "zb/log.h"
+#include "zb/gl_hostcalls.h"
+#include "zb/options.h"
+#include "zb/texture_decode.h"
 
 namespace zb {
 
@@ -66,6 +70,7 @@ struct GlThreadState {
     std::unordered_map<std::uint64_t, std::uint32_t> indexed_strings;
     // The driver's extensions minus the ones this bridge cannot serve, in driver order.
     std::vector<std::string> extensions;
+    std::vector<std::string> real_extensions;  // the driver's own list, without gl_advertise_compressed additions
     bool extensions_known = false;
 };
 
@@ -99,6 +104,29 @@ GlThreadState& state(const HostGl& host) {
 
 // The driver's extensions this bridge can serve, in the order the driver lists them. GLES 3.0
 // enumerates them one by one; a GLES 2.0 context has only the single space-separated string.
+// gl_advertise_compressed=1: also list the extensions of the texture formats this bridge decodes on the
+// CPU (DXT / S3TC, ATC, 3DC, RGTC), so a game that picks its texture format from the extension list may
+// pick one of them. Off by default: the driver's own list is passed on unchanged.
+const std::vector<std::string>& advertised_extension_names() {
+    static const std::vector<std::string> names = {
+        "GL_EXT_texture_compression_s3tc", "GL_EXT_texture_compression_dxt1", "GL_OES_texture_compression_S3TC",
+        "GL_AMD_compressed_ATC_texture",   "GL_ATI_texture_compression_atitc", "GL_AMD_compressed_3DC_texture",
+        "GL_EXT_texture_compression_rgtc", "GL_EXT_texture_compression_latc",
+    };
+    return names;
+}
+
+void finish_extensions(GlThreadState& current) {
+    current.real_extensions = current.extensions;
+    static const bool advertise = option_enabled("gl_advertise_compressed", false);
+    if (!advertise) return;
+    for (const std::string& name : advertised_extension_names()) {
+        if (std::find(current.extensions.begin(), current.extensions.end(), name) == current.extensions.end()) {
+            current.extensions.push_back(name);
+        }
+    }
+}
+
 const std::vector<std::string>& served_extensions(HostGl& host) {
     GlThreadState& current = state(host);
     if (current.extensions_known) return current.extensions;
@@ -113,10 +141,14 @@ const std::vector<std::string>& served_extensions(HostGl& host) {
             const std::string name(reinterpret_cast<const char*>(entry));
             if (extension_served(name)) current.extensions.push_back(name);
         }
+        finish_extensions(current);
         return current.extensions;
     }
     const GLubyte* all = host.backend().glGetString(kGlExtensions);
-    if (all == nullptr) return current.extensions;
+    if (all == nullptr) {
+        finish_extensions(current);
+        return current.extensions;
+    }
     std::string_view rest(reinterpret_cast<const char*>(all));
     while (!rest.empty()) {
         const std::size_t space = rest.find(' ');
@@ -125,7 +157,102 @@ const std::vector<std::string>& served_extensions(HostGl& host) {
         if (space == std::string_view::npos) break;
         rest.remove_prefix(space + 1);
     }
+    finish_extensions(current);
     return current.extensions;
+}
+
+// ---- legacy texture formats ------------------------------------------------------------------------
+
+bool driver_extension(HostGl& host, std::string_view name) {
+    served_extensions(host);  // fills real_extensions
+    for (const std::string& known : state(host).real_extensions) {
+        if (known == name) return true;
+    }
+    return false;
+}
+
+// True when a compressed upload in this format must be decoded on the CPU instead of being given to the
+// driver. gl_decode_compressed=0 turns all of it off; gl_decode_s3tc=1 (default, what this bridge always
+// did for DXT5) decodes the S3TC family even when the driver claims to support it.
+bool compressed_needs_decode(HostGl& host, GLenum format) {
+    static const bool master = option_enabled("gl_decode_compressed", true);
+    if (!master) return false;
+    switch (texture_format_family(format)) {
+        case TextureFamily::S3tc: {
+            static const bool always = option_enabled("gl_decode_s3tc", true);
+            if (always) return true;
+            if (format >= 0x8C4C) return !driver_extension(host, "GL_EXT_texture_compression_s3tc_srgb");
+            if (driver_extension(host, "GL_EXT_texture_compression_s3tc") ||
+                driver_extension(host, "GL_OES_texture_compression_S3TC") ||
+                driver_extension(host, "GL_NV_texture_compression_s3tc")) {
+                return false;
+            }
+            if (format <= 0x83F1 && driver_extension(host, "GL_EXT_texture_compression_dxt1")) return false;
+            if (format == 0x83F2 && driver_extension(host, "GL_ANGLE_texture_compression_dxt3")) return false;
+            if (format == 0x83F3 && driver_extension(host, "GL_ANGLE_texture_compression_dxt5")) return false;
+            return true;
+        }
+        case TextureFamily::Rgtc:
+            if (format == 0x8C70 || format == 0x8C72) return !driver_extension(host, "GL_EXT_texture_compression_latc");
+            if (format == 0x87F9 || format == 0x87FA) return !driver_extension(host, "GL_AMD_compressed_3DC_texture");
+            return !(driver_extension(host, "GL_EXT_texture_compression_rgtc") ||
+                     driver_extension(host, "GL_ARB_texture_compression_rgtc"));
+        case TextureFamily::Atc:
+            return !(driver_extension(host, "GL_AMD_compressed_ATC_texture") ||
+                     driver_extension(host, "GL_ATI_texture_compression_atitc"));
+        case TextureFamily::None:
+            break;
+    }
+    return false;
+}
+
+// TGA files (and many desktop-made textures) are stored as BGR / BGRA. OpenGL ES 2.0 has no GL_BGR at all,
+// and GL_BGRA_EXT only where the driver lists GL_EXT_texture_format_BGRA8888. For those uploads the bytes
+// are swapped here and the texture is created as RGB / RGBA. gl_bgra_fix=0 turns this off.
+bool convert_bgr_upload(HostGl& host, HostGl::Call& call, bool is_sub) {
+    static const bool enabled = option_enabled("gl_bgra_fix", true);
+    if (!enabled) return false;
+    const GLenum format = call.scalar<GLenum>(6);
+    const GLenum type = call.scalar<GLenum>(7);
+    if (type != 0x1401 || (format != 0x80E1 && format != 0x80E0)) return false;  // GL_UNSIGNED_BYTE, BGRA / BGR
+    if (format == 0x80E1 && (driver_extension(host, "GL_EXT_texture_format_BGRA8888") ||
+                             driver_extension(host, "GL_APPLE_texture_format_BGRA8888"))) {
+        return false;
+    }
+    if (host.pixel_buffer(false) != 0) return false;
+    const GLenum target = call.scalar<GLenum>(0);
+    const GLint level = call.scalar<GLint>(1);
+    const GLint xoffset = is_sub ? call.scalar<GLint>(2) : 0;
+    const GLint yoffset = is_sub ? call.scalar<GLint>(3) : 0;
+    const GLsizei width = call.scalar<GLsizei>(is_sub ? 4 : 3);
+    const GLsizei height = call.scalar<GLsizei>(is_sub ? 5 : 4);
+    if (width <= 0 || height <= 0) return false;
+    const int bytes_per_pixel = format == 0x80E1 ? 4 : 3;
+    const GLenum new_format = bytes_per_pixel == 4 ? 0x1908 : 0x1907;  // GL_RGBA / GL_RGB
+    GLint internal = 0;
+    if (!is_sub) {
+        internal = call.scalar<GLint>(2);
+        if (internal == 0x80E1 || internal == 0x80E0) internal = static_cast<GLint>(new_format);
+    }
+    const GLint border = is_sub ? 0 : call.scalar<GLint>(5);
+    const std::uint32_t address = call.arg(8);
+    if (address == 0) {  // storage only
+        if (!is_sub) host.backend().glTexImage2D(target, level, internal, width, height, border, new_format, type, nullptr);
+        return true;
+    }
+    const GLint alignment = std::max<GLint>(1, host.pixel_alignment(false));
+    const std::size_t row = ((static_cast<std::size_t>(width) * bytes_per_pixel + alignment - 1) / alignment) * alignment;
+    const std::size_t total = row * (static_cast<std::size_t>(height) - 1) + static_cast<std::size_t>(width) * bytes_per_pixel;
+    const std::uint8_t* source = host.runtime().memory().host_ptr(address, total, kPageRead);
+    if (source == nullptr) return false;
+    std::vector<std::uint8_t> copy(source, source + total);
+    swap_red_blue(copy.data(), width, height, bytes_per_pixel, row);
+    if (is_sub) {
+        host.backend().glTexSubImage2D(target, level, xoffset, yoffset, width, height, new_format, type, copy.data());
+    } else {
+        host.backend().glTexImage2D(target, level, internal, width, height, border, new_format, type, copy.data());
+    }
+    return true;
 }
 
 // Copies a host string into guest memory and answers the call with its guest address.
@@ -575,6 +702,34 @@ bool zbgl_manual_glGetFloatv(HostGl& host, HostGl::Call& call) {
 }
 
 bool zbgl_manual_glGetIntegerv(HostGl& host, HostGl::Call& call) {
+    {
+        static const bool advertise = option_enabled("gl_advertise_compressed", false);
+        const GLenum pname = call.scalar<GLenum>(0);
+        if (advertise && (pname == kGlNumCompressedTextureFormats || pname == kGlCompressedTextureFormats)) {
+            // the driver's formats plus the ones decoded here
+            std::vector<GLint> formats;
+            GLint driver_count = 0;
+            host.backend().glGetIntegerv(kGlNumCompressedTextureFormats, &driver_count);
+            if (driver_count > 0) {
+                formats.resize(static_cast<std::size_t>(driver_count));
+                host.backend().glGetIntegerv(kGlCompressedTextureFormats, formats.data());
+            }
+            static const GLint kDecoded[] = {0x83F0, 0x83F1, 0x83F2, 0x83F3, 0x8C92, 0x8C93, 0x87EE,
+                                             0x87F9, 0x87FA, 0x8DBB, 0x8DBD, 0x8C70, 0x8C72};
+            for (const GLint format : kDecoded) {
+                if (std::find(formats.begin(), formats.end(), format) == formats.end()) formats.push_back(format);
+            }
+            GLint* data = call.pointer<GLint>(1, pname == kGlNumCompressedTextureFormats ? 1 : formats.size(),
+                                              kPageRead | kPageWrite);
+            if (!call.valid()) return true;
+            if (pname == kGlNumCompressedTextureFormats) {
+                *data = static_cast<GLint>(formats.size());
+            } else {
+                std::copy(formats.begin(), formats.end(), data);
+            }
+            return true;
+        }
+    }
     if (call.scalar<GLenum>(0) == kGlNumExtensions) {
         // Must match what glGetStringi hands out, or the guest reads past the filtered list.
         GLint* data = call.pointer<GLint>(1, 1, kPageRead | kPageWrite);
@@ -586,6 +741,7 @@ bool zbgl_manual_glGetIntegerv(HostGl& host, HostGl::Call& call) {
 }
 
 bool zbgl_manual_glTexImage2D(HostGl& host, HostGl::Call& call) {
+    if (convert_bgr_upload(host, call, false)) return true;
     const GLenum target = call.scalar<GLenum>(0);
     const GLint level = call.scalar<GLint>(1);
     const GLint internalformat = call.scalar<GLint>(2);
@@ -603,6 +759,7 @@ bool zbgl_manual_glTexImage2D(HostGl& host, HostGl::Call& call) {
 }
 
 bool zbgl_manual_glTexSubImage2D(HostGl& host, HostGl::Call& call) {
+    if (convert_bgr_upload(host, call, true)) return true;
     const GLenum target = call.scalar<GLenum>(0);
     const GLint level = call.scalar<GLint>(1);
     const GLint xoffset = call.scalar<GLint>(2);
@@ -616,6 +773,48 @@ bool zbgl_manual_glTexSubImage2D(HostGl& host, HostGl::Call& call) {
                        host.pixel_alignment(false), 8, kPageRead, pixels)) return true;
     host.backend().glTexSubImage2D(target, level, xoffset, yoffset, width, height,
                                    format, type, pixels);
+    return true;
+}
+
+// glCompressedTexImage2D / glCompressedTexSubImage2D in a format the CPU decodes (DXT1/3/5, RGTC, 3DC, ATC):
+// the image is turned into RGBA8888 and uploaded with glTexImage2D / glTexSubImage2D. False = not ours, the
+// call goes to the driver as it is (this includes every call that would be an error: wrong size, bad pointer).
+bool zbgl_try_decode_compressed(HostGl& host, HostGl::Call& call) {
+    const bool is_sub = call.index() == ZB_GL_HC_glCompressedTexSubImage2D;
+    const GLenum target = call.scalar<GLenum>(0);
+    const GLint level = call.scalar<GLint>(1);
+    const GLint xoffset = is_sub ? call.scalar<GLint>(2) : 0;
+    const GLint yoffset = is_sub ? call.scalar<GLint>(3) : 0;
+    const GLsizei width = call.scalar<GLsizei>(is_sub ? 4 : 3);
+    const GLsizei height = call.scalar<GLsizei>(is_sub ? 5 : 4);
+    const GLenum format = call.scalar<GLenum>(is_sub ? 6 : 2);
+    const GLint border = is_sub ? 0 : call.scalar<GLint>(5);
+    const GLsizei image_size = call.scalar<GLsizei>(is_sub ? 7 : 6);
+    const std::uint32_t address = call.arg(is_sub ? 8 : 7);
+    if (width <= 0 || height <= 0 || !texture_format_decodable(format) || !compressed_needs_decode(host, format)) return false;
+    if (host.pixel_buffer(false) != 0) return false;
+    if (address == 0) {  // storage only
+        if (is_sub) return false;
+        host.backend().glTexImage2D(target, level, 0x1908, width, height, border, 0x1908, 0x1401, nullptr);
+        return true;
+    }
+    const std::size_t needed = compressed_texture_size(format, width, height);
+    if (image_size < 0 || static_cast<std::size_t>(image_size) < needed) return false;
+    const std::uint8_t* data = host.runtime().memory().host_ptr(address, needed, kPageRead);
+    if (data == nullptr) return false;
+    std::vector<std::uint8_t> rgba(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4);
+    if (!decode_compressed_texture(format, width, height, data, needed, rgba.data())) return false;
+    // Rows of decoded pixels are tight: the game's unpack alignment must not apply to them.
+    const GLint alignment = host.pixel_alignment(false);
+    if (alignment != 4) host.backend().glPixelStorei(kGlUnpackAlignment, 4);
+    if (is_sub) {
+        host.backend().glTexSubImage2D(target, level, xoffset, yoffset, width, height, 0x1908, 0x1401, rgba.data());
+    } else {
+        host.backend().glTexImage2D(target, level, 0x1908, width, height, border, 0x1908, 0x1401, rgba.data());
+    }
+    if (alignment != 4) host.backend().glPixelStorei(kGlUnpackAlignment, alignment);
+    static std::atomic<bool> noted{false};
+    if (!noted.exchange(true)) log("GL: decoding compressed textures on the CPU (first format 0x%x %dx%d)", static_cast<unsigned>(format), width, height);
     return true;
 }
 
