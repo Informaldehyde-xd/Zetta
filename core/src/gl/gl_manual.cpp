@@ -198,8 +198,7 @@ bool compressed_needs_decode(HostGl& host, GLenum format) {
             return !(driver_extension(host, "GL_EXT_texture_compression_rgtc") ||
                      driver_extension(host, "GL_ARB_texture_compression_rgtc"));
         case TextureFamily::Atc:
-            return !(driver_extension(host, "GL_AMD_compressed_ATC_texture") ||
-                     driver_extension(host, "GL_ATI_texture_compression_atitc"));
+            return true;
         case TextureFamily::None:
             break;
     }
@@ -790,7 +789,7 @@ bool zbgl_try_decode_compressed(HostGl& host, HostGl::Call& call) {
     const GLenum format = call.scalar<GLenum>(is_sub ? 6 : 2);
     const GLint border = is_sub ? 0 : call.scalar<GLint>(5);
     const GLsizei image_size = call.scalar<GLsizei>(is_sub ? 7 : 6);
-    const std::uint32_t address = call.arg(is_sub ? 8 : 7);
+    std::uint32_t address = call.arg(is_sub ? 8 : 7);
     if (width <= 0 || height <= 0 || !texture_format_decodable(format) || !compressed_needs_decode(host, format)) return false;
     if (host.pixel_buffer(false) != 0) return false;
     if (address == 0) {  // storage only
@@ -798,6 +797,22 @@ bool zbgl_try_decode_compressed(HostGl& host, HostGl::Call& call) {
         host.backend().glTexImage2D(target, level, 0x1908, width, height, border, 0x1908, 0x1401, nullptr);
         return true;
     }
+    // --- START OF GAMELOFT HEADER STRIPPING ---
+if (!is_sub && address != 0 && format == 0x8C93) { // 0x8C93 is ATC Explicit Alpha
+    const std::uint8_t* header = host.runtime().memory().host_ptr(address, 16, kPageRead);
+    if (header != nullptr) {
+        std::uint16_t h_w = 0, h_h = 0, h_fmt = 0;
+        std::memcpy(&h_w, header, 2);
+        std::memcpy(&h_h, header + 2, 2);
+        std::memcpy(&h_fmt, header + 4, 2);
+        
+        // If header matches dimensions and format, skip the 16 bytes
+        if (h_w == width && h_h == height && h_fmt == format) {
+            address += 16;
+        }
+    }
+}
+// --- END OF GAMELOFT HEADER STRIPPING ---
     const std::size_t needed = compressed_texture_size(format, width, height);
     if (image_size < 0 || static_cast<std::size_t>(image_size) < needed) return false;
     const std::uint8_t* data = host.runtime().memory().host_ptr(address, needed, kPageRead);
