@@ -20,7 +20,8 @@ permissions:
 
 env:
   NDK_VERSION: 29.0.14206865
-  DYNARMIC_URL: https://github.com/Vita3K/dynarmic
+  DYNARMIC_URL: https://github.com/Informaldehyde-xd/IX32PSLDYNAR.git
+  DYNARMIC_COMMIT: main
 
 jobs:
   native:
