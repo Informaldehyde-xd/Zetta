@@ -49,7 +49,10 @@ final class ExactWindow {
         if (traceReset) return;
         traceReset = true;
         final File dir = Diagnostics.externalFilesDir();
-        if (dir != null) new File(dir, "zb-touch.txt").delete();
+        if (dir != null) {
+            new File(dir, "zb-touch.txt").delete();
+            new File(dir, "zb-vp.txt").delete();  // a picture shift from an earlier session
+        }
         traceLines = 0;
     }
 
@@ -75,9 +78,11 @@ final class ExactWindow {
         final int shiftY;
         final int viewWidth;   // 0 = automatic fit
         final int viewHeight;  // 0 = automatic fit
+        final int glDy;        // picture shift of the game's viewport (native gl_viewport_dy)
 
         Setting(int width, int height, boolean scale, boolean spoofDisplay, int shiftX, int shiftY, int viewWidth,
-                int viewHeight) {
+                int viewHeight, int glDy) {
+            this.glDy = glDy;
             this.width = width;
             this.height = height;
             this.scale = scale;
@@ -103,6 +108,7 @@ final class ExactWindow {
         int shiftY = 0;
         int viewWidth = 0;
         int viewHeight = 0;
+        int glDy = 0;
         try (BufferedReader in = new BufferedReader(new FileReader(file))) {
             String line;
             while ((line = in.readLine()) != null) {
@@ -118,6 +124,7 @@ final class ExactWindow {
                     else if (name.equals("window_shift_y")) shiftY = Integer.parseInt(value);
                     else if (name.equals("window_view_width")) viewWidth = Integer.parseInt(value);
                     else if (name.equals("window_view_height")) viewHeight = Integer.parseInt(value);
+                    else if (name.equals("gl_viewport_dy")) glDy = Integer.parseInt(value);
                     else if (name.equals("window_spoof_display")) spoofDisplay = !(value.isEmpty() || value.startsWith("0") || value.startsWith("n") || value.startsWith("f"));
                     else if (name.equals("window_scale")) scale = !(value.isEmpty() || value.startsWith("0") || value.startsWith("n") || value.startsWith("f"));
                 } catch (NumberFormatException e) {
@@ -128,7 +135,7 @@ final class ExactWindow {
             return null;
         }
         if (width < 160 || height < 160) return null;
-        return new Setting(width, height, scale, spoofDisplay, shiftX, shiftY, viewWidth, viewHeight);
+        return new Setting(width, height, scale, spoofDisplay, shiftX, shiftY, viewWidth, viewHeight, glDy);
     }
 
     /** {width, height} the game's Java should see as the screen (window mode with window_spoof_display=1), or null. */
@@ -157,7 +164,7 @@ final class ExactWindow {
         final int wantedHeight = setting.height;
         final boolean scaleMode = setting.scale;
         // live-adjustable: shift x, shift y, shown width, shown height (0 = automatic fit)
-        final int[] adjust = {setting.shiftX, setting.shiftY, scaleMode ? setting.viewWidth : 0, scaleMode ? setting.viewHeight : 0};
+        final int[] adjust = {setting.shiftX, setting.shiftY, scaleMode ? setting.viewWidth : 0, scaleMode ? setting.viewHeight : 0, setting.glDy};
         // Java code that reads the screen from DisplayMetrics sees width x height too (like wm size).
         // window_spoof_display=0 in zb-options.txt leaves the real size.
         if (setting.spoofDisplay) {

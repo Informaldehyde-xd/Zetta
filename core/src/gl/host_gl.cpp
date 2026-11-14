@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -12,6 +13,7 @@
 #include <dlfcn.h>
 
 #include "zb/options.h"
+#include "zb/external_dir.h"
 #include "zb/fbo_scaler.h"
 #include "gl/gl_diagnostics.h"
 #include "gl/host_gles1.h"
@@ -222,16 +224,6 @@ bool dup_check(DupCache& cache, std::uint32_t index, const std::uint32_t a[4]) {
         case ZB_GL_HC_glColorMask:
             return dup_same(cache, kDupDepth, cache.color_mask,
                             (a[0] & 1u) | ((a[1] & 1u) << 1) | ((a[2] & 1u) << 2) | ((a[3] & 1u) << 3));
-        case ZB_GL_HC_glViewport: {
-            ++cache.total[kDupViewport];
-            if (cache.viewport[0] == a[0] && cache.viewport[1] == a[1] && cache.viewport[2] == a[2] &&
-                cache.viewport[3] == a[3]) {
-                ++cache.skipped[kDupViewport];
-                return true;
-            }
-            for (int i = 0; i < 4; ++i) cache.viewport[i] = a[i];
-            return false;
-        }
         // Things that can change the cached state without a matching call:
         case ZB_GL_HC_glDeleteTextures:
             cache.forget_textures();
@@ -312,6 +304,48 @@ void record_rect(char kind, int x, int y, int w, int h) {
 }
 }  // namespace
 
+// gl_viewport_dy (zb-options.txt, live-adjustable in the window adjust panel through zb-vp.txt): moves the
+// picture up (+) or down (-) by this many pixels of the game's surface by shifting every glViewport and
+// glScissor the game sets. The hitboxes are in the game's own coordinates and do not move, so this lines the
+// drawing up with them when a game draws its picture a few pixels off (NOVA 1: its viewport starts at y=-50).
+namespace {
+struct ViewportShift {
+    int applied = 0;
+    bool have_viewport = false, have_scissor = false;
+    GLint vx = 0, vy = 0, vw = 0, vh = 0;
+    GLint sx = 0, sy = 0, sw = 0, sh = 0;
+};
+thread_local ViewportShift g_shift;
+std::atomic<int> g_wanted_dy{0};
+std::atomic<long long> g_dy_checked_ms{0};
+
+// gl_viewport_dy_negative_only=1: shift only the rectangles whose y is below zero (a game that starts its
+// picture off-screen on purpose), leave the others (menus) alone.
+int shift_for(int y, int dy) {
+    static const bool only_negative = option_enabled("gl_viewport_dy_negative_only", false);
+    return (only_negative && y >= 0) ? 0 : dy;
+}
+
+int wanted_viewport_dy() {
+    static const bool init = [] {
+        g_wanted_dy.store(option_number("gl_viewport_dy", 0));
+        return true;
+    }();
+    (void)init;
+    const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (now - g_dy_checked_ms.load(std::memory_order_relaxed) > 300) {
+        g_dy_checked_ms.store(now, std::memory_order_relaxed);
+        if (std::FILE* file = std::fopen(external_file_path("zb-vp.txt").c_str(), "r")) {
+            int value = 0;
+            if (std::fscanf(file, "%d", &value) == 1) g_wanted_dy.store(value, std::memory_order_relaxed);
+            std::fclose(file);
+        }
+    }
+    return g_wanted_dy.load(std::memory_order_relaxed);
+}
+}  // namespace
+
 bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
     // A game that calls GL from a thread of its own before any context is current there (Marmalade,
     // Peggle) would get NULL from the driver and crash. Until this thread has a context, make the
@@ -350,6 +384,38 @@ bool HostGl::handle_host_call(std::uint32_t index, GuestThread& thread) {
     
     Call call(*this, thread, index);
 
+    // viewport / scissor shift (see ViewportShift)
+    if (index == ZB_GL_HC_glViewport || index == ZB_GL_HC_glScissor) {
+        const bool is_viewport = index == ZB_GL_HC_glViewport;
+        const GLint x = static_cast<GLint>(call.arg(0)), y = static_cast<GLint>(call.arg(1));
+        const GLsizei w = static_cast<GLsizei>(call.arg(2)), h = static_cast<GLsizei>(call.arg(3));
+        if (is_viewport) {
+            g_shift.have_viewport = true; g_shift.vx = x; g_shift.vy = y; g_shift.vw = w; g_shift.vh = h;
+        } else {
+            g_shift.have_scissor = true; g_shift.sx = x; g_shift.sy = y; g_shift.sw = w; g_shift.sh = h;
+        }
+        const int dy = wanted_viewport_dy();
+        const int use = shift_for(y, dy);
+        if (use != 0 || g_shift.applied != 0) {
+            g_shift.applied = dy;
+            if (is_viewport) backend_.glViewport(x, y + use, w, h);
+            else backend_.glScissor(x, y + use, w, h);
+            record_rect(is_viewport ? 'V' : 'S', x, y + use, w, h);
+            return true;
+        }
+    } else if (index == ZB_GL_HC_glClear) {
+        // once a frame: a changed shift is applied to the viewport the game set earlier
+        const int dy = wanted_viewport_dy();
+        if (dy != g_shift.applied) {
+            g_shift.applied = dy;
+            if (g_shift.have_viewport) {
+                backend_.glViewport(g_shift.vx, g_shift.vy + shift_for(g_shift.vy, dy), g_shift.vw, g_shift.vh);
+            }
+            if (g_shift.have_scissor) {
+                backend_.glScissor(g_shift.sx, g_shift.sy + shift_for(g_shift.sy, dy), g_shift.sw, g_shift.sh);
+            }
+        }
+    }
     if (index == ZB_GL_HC_glViewport || index == ZB_GL_HC_glScissor) {
         record_rect(index == ZB_GL_HC_glViewport ? 'V' : 'S', static_cast<int>(call.arg(0)), static_cast<int>(call.arg(1)),
                     static_cast<int>(call.arg(2)), static_cast<int>(call.arg(3)));

@@ -36,6 +36,7 @@ final class WindowAdjustPanel {
     static final int SHIFT_Y = 1;
     static final int VIEW_W = 2;
     static final int VIEW_H = 3;
+    static final int GL_DY = 4;  // moves the drawing (not the hitboxes): the game's own viewport, + = up
 
     interface SizeSource {
         /** The shown screen's current width and height in pixels. */
@@ -91,6 +92,7 @@ final class WindowAdjustPanel {
                 WindowAdjustPanel.this.adjust[VIEW_H] = 0;
                 WindowAdjustPanel.this.adjust[SHIFT_X] = 0;
                 WindowAdjustPanel.this.adjust[SHIFT_Y] = 0;
+                WindowAdjustPanel.this.adjust[GL_DY] = 0;
                 changed();
             }
         }));
@@ -107,6 +109,16 @@ final class WindowAdjustPanel {
             }
         }));
         root.addView(row2);
+
+        final LinearLayout row3 = row();
+        final TextView label = new TextView(activity);
+        label.setText("picture only: ");
+        label.setTextColor(Color.WHITE);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        row3.addView(label);
+        row3.addView(repeat("GL\u25B2", new Step(GL_DY, +1)));
+        row3.addView(repeat("GL\u25BC", new Step(GL_DY, -1)));
+        root.addView(row3);
 
         root.setVisibility(View.GONE);
         final FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
@@ -179,7 +191,8 @@ final class WindowAdjustPanel {
                     adjust[VIEW_H] = now[1];
                 }
             }
-            adjust[index] = Math.max(index >= VIEW_W ? 160 : -4000, adjust[index] + amount * (index >= VIEW_W ? 2 : 1));
+            final boolean size = index == VIEW_W || index == VIEW_H;
+            adjust[index] = Math.max(size ? 160 : -4000, adjust[index] + amount * (size ? 2 : 1));
             changed();
         }
     }
@@ -221,12 +234,21 @@ final class WindowAdjustPanel {
     private void changed() {
         updateStatus();
         relayout.run();
+        // the native side polls this file and applies the picture shift to the game's viewport
+        final File dir = Diagnostics.externalFilesDir();
+        if (dir != null) {
+            try (FileWriter out = new FileWriter(new File(dir, "zb-vp.txt"), false)) {
+                out.write(adjust[GL_DY] + "\n");
+            } catch (IOException e) {
+                // the shift is only a convenience
+            }
+        }
     }
 
     private void updateStatus() {
         final int[] now = sizeSource.current();
         status.setText("move " + adjust[SHIFT_X] + "," + adjust[SHIFT_Y] + "   shown " + now[0] + "x" + now[1]
-                + (adjust[VIEW_W] == 0 ? " (auto)" : ""));
+                + (adjust[VIEW_W] == 0 ? " (auto)" : "") + "   picture " + adjust[GL_DY]);
     }
 
     void toggle() {
@@ -251,7 +273,7 @@ final class WindowAdjustPanel {
         final File dir = Diagnostics.externalFilesDir();
         if (dir == null) return;
         final File file = new File(dir, "zb-options.txt");
-        final String[] keys = {"window_shift_x", "window_shift_y", "window_view_width", "window_view_height"};
+        final String[] keys = {"window_shift_x", "window_shift_y", "window_view_width", "window_view_height", "gl_viewport_dy"};
         final List<String> lines = new ArrayList<String>();
         try (BufferedReader in = new BufferedReader(new FileReader(file))) {
             String line;
@@ -270,6 +292,7 @@ final class WindowAdjustPanel {
         lines.add("window_shift_y=" + adjust[SHIFT_Y]);
         lines.add("window_view_width=" + adjust[VIEW_W]);
         lines.add("window_view_height=" + adjust[VIEW_H]);
+        lines.add("gl_viewport_dy=" + adjust[GL_DY]);
         try (FileWriter out = new FileWriter(file, false)) {
             for (String line : lines) out.write(line + "\n");
             status.setText("saved: move " + adjust[SHIFT_X] + "," + adjust[SHIFT_Y] + " shown "
